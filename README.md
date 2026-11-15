@@ -10,6 +10,9 @@ Scan your shopping tickets, track every euro, and squeeze a little more savings 
 - **Price comparison**: every scanned product is remembered per store. Spare shows where each one is cheapest, the best store for your shopping list, and how much you overpaid this month.
 - **Bank statement import**: CSV, Excel, CAMT.053 (XML) and OFX from KBC, Belfius, ING, BNP Paribas Fortis, Argenta, Crelan, Revolut, N26, Wise and most European banks. Bills, transfers to your own accounts and payments you already scanned are skipped automatically. If a format isn't recognised, AI reads the file's header to find the columns.
 - **Notifications** (Android app): reminders 3 days before quarterly/yearly bills, a Sunday summary, a last-day-of-month recap, and alerts at 80% / 100% of the monthly budget.
+- **Store mode**: tick your list as items go in the cart, with the running total against the trip cap, shelf prices you can correct, and a warning when something no longer fits. The screen stays on.
+- **Streaks & trophies**: trips in a row under the cap, months with the goal reached, total saved, and 14 trophies to unlock.
+- **Long tickets & offline**: up to 4 photos per ticket. Without network, photos are kept on the phone and read automatically once you're back online (tickets read that way are flagged "to check"). Any ticket can be edited from History.
 - **English, French and Dutch** (Settings → Language, or the picker on the login screen).
 - **Accounts + sync**: the same data on PC (website) and phone (Android app), stored in your own Cloudflare D1 database.
 

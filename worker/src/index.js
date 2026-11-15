@@ -88,10 +88,11 @@ function extractJSON(out) {
   return JSON.parse(s.slice(start, s.lastIndexOf(close) + 1));
 }
 async function askModel(env, prompt, imageDataUrl) {
+  const imgs = Array.isArray(imageDataUrl) ? imageDataUrl : imageDataUrl ? [imageDataUrl] : [];
   if (env.ANTHROPIC_API_KEY) {
     const content = [];
-    if (imageDataUrl) {
-      const [, media_type, data] = imageDataUrl.match(/^data:([^;]+);base64,(.*)$/) || [];
+    for (const url of imgs) {
+      const [, media_type, data] = url.match(/^data:([^;]+);base64,(.*)$/) || [];
       if (data) content.push({ type: "image", source: { type: "base64", media_type, data } });
     }
     content.push({ type: "text", text: prompt });
@@ -105,7 +106,7 @@ async function askModel(env, prompt, imageDataUrl) {
     return j.content.map((c) => c.text || "").join("");
   }
   const content = [];
-  if (imageDataUrl) content.push({ type: "image_url", image_url: { url: imageDataUrl } });
+  for (const url of imgs) content.push({ type: "image_url", image_url: { url } });
   content.push({ type: "text", text: prompt });
   const res = await env.AI.run(VISION_MODEL, { messages: [{ role: "user", content }], max_tokens: 3000, temperature: 0.1 });
   return res?.response ?? res?.choices?.[0]?.message?.content ?? res;
@@ -258,12 +259,14 @@ async function api(req, env, path) {
   }
 
   if (path === "/api/scan" && method === "POST") {
-    const { image, text, prompt } = await readBody(req);
+    const { image, images, text, prompt } = await readBody(req, 12_000_000);
     if (typeof prompt !== "string" || prompt.length > 8000) return fail(400, "Missing prompt.");
-    if (image && !/^data:image\/(jpeg|png|webp);base64,/.test(image)) return fail(400, "Unsupported image.");
+    const imgs = (Array.isArray(images) ? images : image ? [image] : []).slice(0, 4);
+    if (imgs.some((u) => typeof u !== "string" || !/^data:image\/(jpeg|png|webp);base64,/.test(u))) return fail(400, "Unsupported image.");
     await useAI(env, user);
-    const full = text ? `${prompt}\n\nOrder text:\n${String(text).slice(0, 20000)}` : prompt;
-    try { return json(extractJSON(await askModel(env, full, image || null))); }
+    const multi = imgs.length > 1 ? `\n\nThe receipt is split over ${imgs.length} photos, in order from top to bottom. Lines visible on two photos must be counted only once.` : "";
+    const full = text ? `${prompt}\n\nOrder text:\n${String(text).slice(0, 20000)}` : prompt + multi;
+    try { return json(extractJSON(await askModel(env, full, imgs))); }
     catch (e) { return fail(502, "Couldn't read that ticket. " + e.message); }
   }
 

@@ -58,3 +58,6 @@ nav a b{display:block;font-size:19px;font-weight:400}nav a.on{color:var(--ink);b
 .auth{max-width:380px;margin:8vh auto 0}.auth h1{font-size:40px;margin-bottom:4px}
 .auth .tabs{display:flex;gap:6px;margin:18px 0 6px}.auth .tabs button{flex:1}
 .err{color:var(--bad);font-size:13px;margin-top:8px}
+.li.big{padding:12px 0;font-size:16px}.li.big input[type=checkbox]{width:26px;height:26px}
+.li.in .nm{color:var(--acc);font-weight:600}
+a.btn{display:inline-block}

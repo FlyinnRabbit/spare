@@ -34,13 +34,13 @@ function hash(s){let h=5381;for(let i=0;i<s.length;i++)h=((h<<5)+h+s.charCodeAt(
 /* ---------- state ---------- */
 function defaults(){return{v:2,updatedAt:0,setupDone:false,
  settings:{income:0,target:0,monthlyStep:10,tripStep:0.5,trips:8,foodShare:75,minCap:15,notif:{bills:true,weekly:true,alerts:true}},
- bills:[],entries:[],deleted:[],prefs:{},list:[],cur:{month:null,level:0,alerted:[]},months:{},tips:null,notice:null,flash:null}}
+ bills:[],entries:[],deleted:[],prefs:{},list:[],cur:{month:null,level:0,alerted:[]},months:{},tips:null,notice:null,flash:null,trophiesSeen:[]}}
 function migrate(s){const d=defaults();if(s.setupDone===undefined)s.setupDone=(s.updatedAt||0)>0||(s.entries||[]).length>0||(s.bills||[]).length>0;
  for(const k in d)if(s[k]===undefined)s[k]=d[k];for(const k in d.settings)if(s.settings[k]===undefined)s.settings[k]=d.settings[k];
  if(!s.cur.alerted)s.cur.alerted=[];return s}
 
 let S,sync='idle',pubT=null,notifT=null;
-let ui={draft:null,busy:false,err:'',open:null,del:null,tipsBusy:false,tipsErr:'',copied:false,imp:false,bank:null,bankBusy:false,bankErr:'',q:''};
+let ui={photos:[],queue:[],storeName:'',draft:null,busy:false,err:'',open:null,del:null,tipsBusy:false,tipsErr:'',copied:false,imp:false,bank:null,bankBusy:false,bankErr:'',q:''};
 
 function load(){let loc=null;try{loc=JSON.parse(localStorage.getItem(LSK))}catch(e){}S=migrate(loc||defaults())}
 function localSave(){try{localStorage.setItem(LSK,JSON.stringify(S))}catch(e){}}
@@ -120,18 +120,20 @@ function checkAlerts(){const mk=mkey(),liv=living(mk),sp=spentIn(mk);if(!(liv>0)
 
 /* ---------- render ---------- */
 const $=document.getElementById('root');
-const VIEWS=['overview','scan','list','prices','history','settings'];
+const VIEWS=['overview','scan','list','prices','history','settings','store','trophies'];
 const view=()=>{const h=location.hash.slice(1);return VIEWS.includes(h)?h:'overview'};
 function status(){const el=document.getElementById('sync');if(el)el.innerHTML=({saving:'<span class="spin"></span>'+T('Syncing…'),synced:'✓ '+T('Synced'),offline:T('Offline, will sync'),error:T('Sync problem, retrying'),idle:''})[sync]||''}
 const logo=(w=84)=>`<img src="icon-192.png" alt="" width="${w}" height="${w}" style="border-radius:${Math.round(w/4)}px;display:block;margin-bottom:12px">`;
 function render(){if(!$)return;document.documentElement.lang=LANG;if(!AUTH.token)return renderAuth();
  if(ui.pulling){$.innerHTML=`<div class="auth">${logo()}<h1>Spare</h1><div class="note warn"><span class="spin"></span>${T('Loading your data…')}</div></div>`;return}
  if(!S.setupDone)return renderSetup();const v=view();
- const nav=[['overview','◔',T('Overview')],['scan','⊡',T('Scan')],['list','☰',T('List')],['prices','€',T('Prices')],['history','↺',T('History')],['settings','⚙',T('Settings')]].map(([k,i,t])=>`<a href="#${k}" class="${v===k?'on':''}"><b>${i}</b>${t}</a>`).join('');
- $.innerHTML=`<div class="top"><h1 style="display:flex;align-items:center;gap:10px"><img src="favicon.png" alt="" width="34" height="34" style="border-radius:9px">Spare</h1><span class="status" id="sync"></span></div>${({overview:vOverview,scan:vScan,list:vList,prices:vPrices,history:vHistory,settings:vSettings})[v]()}<nav>${nav}</nav>`;status()}
+ const vn=v==='trophies'?'overview':v;const nav=[['overview','◔',T('Overview')],['scan','⊡',T('Scan')],['list','☰',T('List')],['prices','€',T('Prices')],['history','↺',T('History')],['settings','⚙',T('Settings')]].map(([k,i,t])=>`<a href="#${k}" class="${vn===k?'on':''}"><b>${i}</b>${t}</a>`).join('');
+ $.innerHTML=`<div class="top"><h1 style="display:flex;align-items:center;gap:10px"><img src="favicon.png" alt="" width="34" height="34" style="border-radius:9px">Spare</h1><span class="status" id="sync"></span></div>${({overview:vOverview,scan:vScan,list:vList,prices:vPrices,history:vHistory,settings:vSettings,store:vStore,trophies:vTrophies})[v]()}${v==='store'?'':`<nav>${nav}</nav>`}`;status();wakeLock(v==='store')}
 
 function flashHtml(){const f=S.flash;if(!f||Date.now()-f.at>10*60*1000)return'';let h='';
  if(f.kind==='online')h=`<div class="note good">${T('Saved {0} of spending. {1} left to live on this month.',fmt(f.total),fmt(f.left))}</div>`;
+ else if(f.kind==='edit')h=`<div class="note good">${T('Ticket updated.')}</div>`;
+ else if(f.kind==='auto')h=`<div class="note good">${T('Your ticket from {0} ({1}) was read and saved. Check it in History.',esc(f.store||T('a store')),fmt(f.total))} <a href="#history">${T('History')}</a></div>`;
  else if(f.kind==='bank')h=`<div class="note good">${T('Imported {0} payments ({1}) from your bank statement.',f.n,fmt(f.total))}</div>`;
  else if(f.under)h=`<div class="note good"><b>${T('Under the cap by {0}.',fmt(f.cap-f.total))}</b> ${T('Your next trip cap is {0}, {1} tighter. Keep it going.',fmt(f.next),fmt(S.settings.tripStep))}</div>`;
  else h=`<div class="note bad"><b>${T('{0} over the {1} cap.',fmt(f.total-f.cap),fmt(f.cap))}</b> ${f.cuts.length?T('Leaving {0} on the shelf would have kept you under.',f.cuts.map(c=>esc(c.name)+' ('+fmt(c.price)+')').join(', ')):T('Everything on it was a need. Consider raising the minimum cap in Settings.')} ${T('Next cap: {0}.',fmt(f.next))}</div>`;
@@ -151,12 +153,16 @@ function vOverview(){const mk=mkey(),inc=S.settings.income,cm=commit(),tg=target
  const plan=planList(cap),noFit=S.list.filter(i=>plan.res[i.id]&&!plan.res[i.id].fits);
  const PI=priceIndex(),missed=missedSavings(PI,mk),up=upcoming(14);
  let tips='';if(S.tips&&S.tips.items)tips=S.tips.items.map(t=>`<div class="tip"><div class="row" style="padding:0"><h3>${esc(t.title)}</h3><span class="num" style="color:var(--acc)">~${fmt(t.monthly)}${T('/mo')}</span></div><div class="small mute">${esc(t.detail)}</div></div>`).join('');
- return `${S.notice?`<div class="note good">${noticeText(S.notice)} <button class="link" data-act="dismiss">${T('Dismiss')}</button></div>`:''}${flashHtml()}
+ const st=stats(),earned=TROPHIES.filter(t=>t[4](st)),fresh=earned.filter(t=>!(S.trophiesSeen||[]).includes(t[0])),toCheck=S.entries.filter(e=>e.review).length;
+ return `${fresh.length?`<div class="note good">🎉 <b>${fresh.length>1?T('{0} new trophies!',fresh.length):T('New trophy!')}</b> ${fresh.map(t=>t[1]+' '+esc(T(t[2]))).join(' · ')} <button class="link" data-act="trophyok">${T('Nice!')}</button></div>`:''}${toCheck?`<div class="note warn">${T('{0} ticket(s) read automatically while you were away. Give them a quick check.',toCheck)} <a href="#history">${T('History')}</a></div>`:''}${S.notice?`<div class="note good">${noticeText(S.notice)} <button class="link" data-act="dismiss">${T('Dismiss')}</button></div>`:''}${flashHtml()}
  <div class="card hero"><div class="mute small">${T('Left to live on in {0}',mname(mk))}</div><div class="big" style="color:${left<0?'var(--bad)':'inherit'}">${fmt(left)}</div>
  <div class="bar ${left<0?'over':''}"><i style="width:${pct}%"></i></div><div class="small mute">${T('{0} spent of {1}',fmt(sp),fmt(liv))} · ${dl>1?T('{0} days left',dl):T('last day')} · <b class="num" style="color:var(--ink)">${fmt(Math.max(0,left)/dl)}</b>${T('/day')}</div>
  <div class="grid2" style="margin-top:14px"><div class="stat"><div class="tiny mute">${T('Savings goal')}</div><div class="v">${fmt(tg)}</div><div class="tiny mute">${left>=0?T('on track'):T('at risk, {0} short',fmt(-left))}</div></div>
  <div class="stat"><div class="tiny mute">${T('Next shopping trip cap')}</div><div class="v">${fmt(cap)}</div><div class="tiny mute">${T('squeeze level {0} · −{1} per win',S.cur.level,fmt(S.settings.tripStep))}</div></div></div>
  ${bonus>0?`<div class="note good small" style="margin-bottom:0">${T('Extra saved by staying under your trip caps: {0} on top of the goal.','<b>'+fmt(bonus)+'</b>')}</div>`:''}</div>
+ <div class="card"><div class="row" style="padding:0"><h2 style="margin:0">${T('Streaks & trophies')}</h2><a href="#trophies" class="small">${T('See all')}</a></div>
+ <div class="grid2" style="margin-top:10px"><div class="stat"><div class="tiny mute">${T('Trips under the cap in a row')}</div><div class="v">🔥 ${st.streak}</div><div class="tiny mute">${T('best: {0}',st.bestStreak)}</div></div><div class="stat"><div class="tiny mute">${T('Saved since you started')}</div><div class="v">${fmt(st.savedPast)}</div><div class="tiny mute">${T('+ {0} this month so far',fmt(st.savedNow))}</div></div></div>
+ ${earned.length?`<div style="font-size:22px;margin-top:10px;letter-spacing:4px" title="${T('Trophies')}">${earned.map(t=>t[1]).join('')}</div>`:`<div class="tiny mute" style="margin-top:8px">${T('Your first trophy is one ticket away.')}</div>`}</div>
  ${up.length?`<div class="card"><h2>${T('Coming up')}</h2>${up.map(x=>{const dd=dayDiff(x.d,today());return `<div class="row"><span>${esc(x.b.name)} <span class="mute small">${dd===0?T('today'):dd===1?T('tomorrow'):T('in {0} days',dd)} · ${dshort(x.d)}</span></span><span class="num">${fmt(x.b.amount)}</span></div>`}).join('')}<div class="tiny mute" style="margin-top:6px">${T('Already set aside in your monthly budget.')}</div></div>`:''}
  ${noFit.length?`<div class="card"><h2>${T('Not affordable on your next trip')}</h2>${noFit.map(i=>`<div class="row"><span>${esc(i.name)}</span><span class="small" style="color:var(--bad)">${T('short by {0}',fmt(plan.res[i.id].short))}</span></div>`).join('')}<div class="tiny mute" style="margin-top:6px">${T('From your shopping list.')} <a href="#list">${T('Edit list')}</a></div></div>`:''}
  ${missed>0.5?`<div class="card"><div class="row" style="padding:0"><span>${T('Paid more than the cheapest store you know this month')}</span><b class="num" style="color:var(--warn)">${fmt(missed)}</b></div><div class="tiny mute" style="margin-top:4px"><a href="#prices">${T('See where to buy what')}</a></div></div>`:''}
@@ -176,7 +182,11 @@ function vOverview(){const mk=mkey(),inc=S.settings.income,cm=commit(),tg=target
 function vScan(){if(ui.draft)return vReview();if(ui.bank)return vBank();
  return `${flashHtml()}<div class="card"><h2>${T('Scan a receipt')}</h2>
  ${ui.busy?`<div class="note warn"><span class="spin"></span>${T('Reading your receipt…')}</div>`:''}${ui.err?`<div class="note bad">${esc(ui.err)}</div>`:''}
- <label class="drop"><input type="file" accept="image/*" capture="environment" data-act="file"><div class="ic">⊡</div><b>${T('Take or choose a photo of the ticket')}</b><div class="small mute">${T('Shop receipts or screenshots of online orders')}</div></label></div>
+ ${ui.photos.length?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">${ui.photos.map((p,i)=>`<div style="position:relative"><img src="${p}" alt="" style="width:76px;height:100px;object-fit:cover;border-radius:10px;border:1px solid var(--line)"><button class="link" data-act="phrm" data-i="${i}" style="position:absolute;top:-6px;right:-6px;background:var(--card);border-radius:99px;padding:0 7px">×</button><span class="tiny mute" style="position:absolute;bottom:4px;left:6px;background:var(--card);border-radius:6px;padding:0 4px">${i+1}</span></div>`).join('')}</div>
+ ${ui.photos.length<4?`<label class="drop" style="padding:14px"><input type="file" accept="image/*" capture="environment" data-act="file" multiple><b>+ ${T('Add the next part of the ticket')}</b><div class="small mute">${T('For long tickets: up to 4 photos, top to bottom.')}</div></label>`:''}
+ <div class="btns">${online()?`<button class="acc" data-act="phread" ${ui.busy?'disabled':''}>${ui.photos.length>1?T('Read ticket ({0} photos)',ui.photos.length):T('Read ticket')}</button><button class="ghost" data-act="phlater">${T('Read later')}</button>`:`<button class="acc" data-act="phlater">${T('Save, read when online')}</button>`}<button class="link" data-act="phclear">${T('Cancel')}</button></div>`
+ :`<label class="drop"><input type="file" accept="image/*" capture="environment" data-act="file" multiple><div class="ic">⊡</div><b>${T('Take or choose a photo of the ticket')}</b><div class="small mute">${T('Shop receipts or screenshots of online orders. Long ticket? Add several photos.')}</div></label>${online()?'':`<div class="tiny mute" style="margin-top:6px">${T('You\'re offline: photos are kept and read automatically once you\'re back online.')}</div>`}`}</div>
+ ${ui.queue.length?`<div class="card"><h2>${T('Waiting to be read')}</h2>${ui.queue.map(q=>`<div class="row"><span>${q.images?T('Ticket photo'):T('Online order')} <span class="mute small">${dshort(q.date)}${q.images&&q.images.length>1?' · '+T('{0} photos',q.images.length):''}</span>${q.failed?`<br><span class="tiny" style="color:var(--bad)">${T('Couldn\'t be read.')}</span>`:''}</span><span>${q.failed?`<button class="link" data-act="qretry" data-id="${q.id}">${T('Retry')}</button><button class="link" data-act="qhand" data-id="${q.id}">${T('By hand')}</button>`:`<span class="tiny mute">${online()?T('reading…'):T('offline')}</span>`}<button class="link" data-act="qdel" data-id="${q.id}">×</button></span></div>`).join('')}</div>`:''}
  <div class="card"><h2>${T('Bank statement')}</h2><div class="small mute">${T('Export your transactions from your banking app or website and import the file. Spare adds the card and online payments you didn\'t scan, and skips bills, transfers and anything already logged.')}</div>
  ${ui.bankBusy?`<div class="note warn"><span class="spin"></span>${T('Reading your statement…')}</div>`:''}${ui.bankErr?`<div class="note bad">${esc(ui.bankErr)}</div>`:''}
  <label class="drop" style="margin-top:10px;padding:18px"><input type="file" accept=".csv,.txt,.xml,.ofx,.qfx,.xlsx,.xls,.sta,text/csv,text/plain,application/xml,text/xml,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" data-act="bankfile"><b>${T('Choose a statement file')}</b><div class="small mute">CSV · Excel · CAMT.053 (XML) · OFX</div></label>
@@ -194,10 +204,10 @@ function vReview(){const d=ui.draft,sum=draftSum(),tot=d.total===''||d.total==nu
   const hint=p&&p.best&&st&&p.best.name!==st.name&&unit>p.best.price+0.01?`<tr><td colspan="5" class="tiny" style="color:var(--warn);padding-top:0">${T('{0} at {1} last time ({2} less)',fmt(p.best.price),esc(p.best.name),fmt(unit-p.best.price))}</td></tr>`:'';
   return `<tr><td><input data-f="name" data-i="${i}" value="${esc(it.name)}"></td><td class="c"><select data-f="cat" data-i="${i}">${catOpts(it.cat)}</select></td><td class="p"><input class="num" inputmode="decimal" data-f="price" data-i="${i}" value="${esc(it.price)}"></td><td><button class="pill ${it.pref}" data-act="pref" data-i="${i}">${it.pref==='need'?T('Need'):T('Want')}</button></td><td><button class="link" data-act="rmitem" data-i="${i}">×</button></td></tr>${hint}`}).join('');
  let check='';
- if(d.kind==='shop'&&cur){const over=r2(tot-cap);
+ if(d.kind==='shop'&&cur&&!d.editId){const over=r2(tot-cap);
   if(over<=0)check=`<div class="note good">${T('{0} under your {1} cap. Saving this tightens the next trip by {2}.',fmt(-over),fmt(cap),fmt(S.settings.tripStep))}</div>`;
   else{const c=cutsFor(d.items.map(i=>({...i,price:num(i.price)})),over);check=`<div class="note bad"><b>${T('{0} over your {1} cap.',fmt(over),fmt(cap))}</b> ${c.cuts.length?T('Skip next time: {0}.',c.cuts.map(x=>esc(x.name)+' ('+fmt(x.price)+')').join(', ')):''}${c.short>0?' '+T('Even without every want you\'d be {0} over.',fmt(c.short)):''}</div>`}}
- return `<div class="card"><h2>${T('Check the ticket')}</h2>
+ return `<div class="card"><h2>${d.editId?T('Edit the ticket'):T('Check the ticket')}</h2>
  <div class="grid2"><div><label class="f">${T('Store')}</label><input data-f="store" value="${esc(d.store)}"></div><div><label class="f">${T('Date')}</label><input type="date" data-f="date" value="${esc(d.date)}"></div></div>
  <label class="f">${T('Type')}</label><select data-f="kind"><option value="shop" ${d.kind==='shop'?'selected':''}>${T('Shopping trip (counts toward trip cap)')}</option><option value="online" ${d.kind==='online'?'selected':''}>${T('Online / other spending')}</option></select>
  <label class="f">${T('Items: tap Need/Want to teach the app what you can cut')}</label>
@@ -228,6 +238,7 @@ function vList(){const cap=tripCap(),p=planList(cap),PI=priceIndex();
  return `<div class="card"><h2>${T('Next trip')}</h2><div class="grid2"><div class="stat"><div class="tiny mute">${T('Your cap')}</div><div class="v">${fmt(cap)}</div></div><div class="stat"><div class="tiny mute">${T('What fits')}</div><div class="v">${fmt(p.total)}</div><div class="tiny mute">${T('of {0} listed',fmt(p.all))}</div></div></div>
  ${p.needsTotal>cap?`<div class="note warn small">${T('Your needs alone come to {0}, above the cap. Drop or swap something, or adjust the minimum cap in Settings.',fmt(p.needsTotal))}</div>`:''}
  <div class="small mute" style="margin-top:10px">${T('Needs are counted first, then wants in the order you added them. Whatever doesn\'t fit gets struck out with the exact amount you\'re short.')}</div></div>
+ ${S.list.length?`<a href="#store" class="btn acc" style="display:block;text-align:center;text-decoration:none;margin-bottom:12px;background:var(--acc);color:#fff">🛒 ${T('Start shopping')}</a>`:''}
  ${bestHtml}
  <div class="card"><h2>${T('Shopping list')}</h2><form data-form="add" style="display:grid;grid-template-columns:1fr 90px auto;gap:8px"><input id="lname" list="known" placeholder="${T('Item (prices fill in from past tickets)')}" autocomplete="off"><input id="lprice" class="num" inputmode="decimal" placeholder="€"><button>${T('Add')}</button></form><datalist id="known">${dl}</datalist>
  <div style="margin-top:10px">${items||`<div class="mute small">${T('Empty. Add what you plan to buy.')}</div>`}</div>
@@ -248,13 +259,60 @@ function vPrices(){const PI=priceIndex(),all=Object.values(PI.idx),mk=mkey(),mis
  ${single.length?`<div class="card"><h2>${T('Seen in one store')}</h2>${single.map(row).join('')}<div class="tiny mute" style="margin-top:6px">${T('Scan a ticket from another store to compare.')}</div></div>`:''}
  ${all.length?'':`<div class="card"><div class="mute small">${T('Nothing to compare yet. Scan a few tickets from different stores.')}</div></div>`}`}
 
+let wl=null;function wakeLock(on){try{if(on&&!wl&&navigator.wakeLock)navigator.wakeLock.request('screen').then(l=>{wl=l;l.addEventListener('release',()=>{wl=null})}).catch(()=>{});else if(!on&&wl){wl.release();wl=null}}catch(e){}}
+function vStore(){const cap=tripCap(),PI=priceIndex(),cart=S.list.filter(i=>i.done),tot=r2(cart.reduce((a,i)=>a+num(i.price),0)),rem=r2(cap-tot),pct=cap>0?Math.min(100,tot/cap*100):100;
+ const order=[...S.list].sort((a,b)=>(a.done?1:0)-(b.done?1:0)||(a.pref==='need'?0:1)-(b.pref==='need'?0:1));
+ const stores=[...new Set(S.entries.filter(e=>e.kind==='shop'&&e.store).map(e=>storeOf(e.store).name))];
+ const rows=order.map(i=>{const p=num(i.price),fits=i.done||p<=rem+1e-9,pr=findProd(PI,i.name),here=pr&&ui.storeName?pr.stores[storeOf(ui.storeName).key]:null;
+  const hint=!i.done&&!fits?`<span class="why">${T('Doesn\'t fit any more, short by {0}',fmt(p-rem))}</span>`:pr&&pr.best&&ui.storeName&&storeOf(ui.storeName).name!==pr.best.name&&(!here||here.price>pr.best.price+0.01)?`<span class="why" style="color:var(--warn)">${T('Cheaper at {0}: {1}',esc(pr.best.name),fmt(pr.best.price))}</span>`:'';
+  return `<div class="li big ${i.done?'in':''} ${fits?'':'no'}"><input type="checkbox" data-act="cart" data-id="${i.id}" ${i.done?'checked':''}><span class="nm">${esc(i.name)}</span><span class="pill ${i.pref}" style="cursor:default">${i.pref==='need'?T('Need'):T('Want')}</span><input class="num" style="width:82px;padding:8px" inputmode="decimal" data-lprice="${i.id}" value="${esc(i.price)}" title="${T('Shelf price')}"><span></span>${hint}</div>`}).join('');
+ return `<div class="card hero" style="position:sticky;top:0;z-index:2"><div class="row" style="padding:0"><span class="mute small">🛒 ${T('In the cart')}</span><a href="#list" class="small">${T('Exit')}</a></div>
+ <div class="big" style="color:${rem<0?'var(--bad)':'inherit'}">${fmt(tot)} <span class="mute" style="font-size:18px">/ ${fmt(cap)}</span></div>
+ <div class="bar ${rem<0?'over':''}"><i style="width:${pct}%"></i></div><div class="small ${rem<0?'':'mute'}" style="${rem<0?'color:var(--bad);font-weight:600':''}">${rem>=0?T('{0} left for this trip',fmt(rem)):T('{0} over the cap: put something back',fmt(-rem))}</div></div>
+ <div class="card"><label class="f" style="margin-top:0">${T('Store')}</label><input data-act="storename" list="stores" value="${esc(ui.storeName)}" placeholder="Colruyt, Aldi…"><datalist id="stores">${stores.map(x=>`<option value="${esc(x)}">`).join('')}</datalist>
+ <div style="margin-top:10px">${rows||`<div class="mute small">${T('Your list is empty.')}</div>`}</div>
+ <form data-form="add" style="display:grid;grid-template-columns:1fr 90px auto;gap:8px;margin-top:10px"><input id="lname" list="known" placeholder="${T('Forgot something?')}" autocomplete="off"><input id="lprice" class="num" inputmode="decimal" placeholder="€"><button>${T('Add')}</button></form><datalist id="known">${Object.values(PI.idx).map(x=>`<option value="${esc(x.label)}">`).join('')}</datalist>
+ <div class="tiny mute" style="margin-top:8px">${T('Tick items as they go in the cart. Change a price if the shelf says otherwise.')}</div></div>
+ <div class="btns" style="margin-bottom:20px"><button class="acc" data-act="storedone" ${cart.length?'':'disabled'}>${T('Done: save this trip')}</button><button class="ghost" data-act="storescan">${T('I\'ll scan the ticket instead')}</button></div>`}
+
+function stats(){const trips=S.entries.filter(e=>e.kind==='shop'&&e.cap!=null).sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0);
+ let cur=0,best=0;const perMonth={};for(const e of trips){if(e.total<=e.cap){cur++;best=Math.max(best,cur);const m=mkey(e.date);perMonth[m]=(perMonth[m]||0)+1}else cur=0}
+ const cm=mkey(),past=Object.keys(S.months).filter(m=>m<cm).sort();let gs=0,bgs=0,hits=0,saved=0;
+ for(const m of past){const sv=savedFor(m);saved+=Math.max(0,sv);if(sv>=targetFor(m)){hits++;gs++;bgs=Math.max(bgs,gs)}else gs=0}
+ const PI=priceIndex();
+ return{tickets:S.entries.filter(e=>e.kind!=='bank').length,streak:cur,bestStreak:best,bestMonthUnder:Math.max(0,...Object.values(perMonth)),
+  noWantTrip:S.entries.some(e=>e.kind==='shop'&&e.items.length>=3&&e.items.every(i=>i.pref==='need')),goalHits:hits,goalStreak:gs,bestGoalStreak:bgs,
+  savedPast:r2(saved),savedNow:r2(Math.max(0,S.settings.income-commit()-spentIn(cm))),compared:Object.values(PI.idx).filter(p=>p.sorted.length>1).length,bankImports:S.entries.filter(e=>e.kind==='bank').length}}
+const TROPHIES=[
+ ['first','🧾','First ticket','Log your first ticket.',s=>s.tickets>=1,s=>[s.tickets,1]],
+ ['streak3','🔥','On a roll','3 shopping trips in a row under the cap.',s=>s.bestStreak>=3,s=>[s.bestStreak,3]],
+ ['streak10','🔥','Unstoppable','10 shopping trips in a row under the cap.',s=>s.bestStreak>=10,s=>[s.bestStreak,10]],
+ ['streak25','☄️','Squeeze master','25 shopping trips in a row under the cap.',s=>s.bestStreak>=25,s=>[s.bestStreak,25]],
+ ['month10','🗜️','Squeezed','10 trips under the cap in one month.',s=>s.bestMonthUnder>=10,s=>[s.bestMonthUnder,10]],
+ ['nowant','🥦','Needs only','A trip of 3 or more items with no wants at all.',s=>s.noWantTrip,null],
+ ['goal1','🎯','Goal!','Reach your monthly savings goal.',s=>s.goalHits>=1,s=>[s.goalHits,1]],
+ ['goal3','🏅','Hat trick','Reach your goal 3 months in a row.',s=>s.bestGoalStreak>=3,s=>[s.bestGoalStreak,3]],
+ ['goal12','🏆','A whole year','Reach your goal 12 months in a row.',s=>s.bestGoalStreak>=12,s=>[s.bestGoalStreak,12]],
+ ['save500','💶','Nest egg','Save €500 in total.',s=>s.savedPast>=500,s=>[s.savedPast,500]],
+ ['save1000','💰','Four figures','Save €1,000 in total.',s=>s.savedPast>=1000,s=>[s.savedPast,1000]],
+ ['save5000','💎','Treasure','Save €5,000 in total.',s=>s.savedPast>=5000,s=>[s.savedPast,5000]],
+ ['compare10','🔎','Bargain hunter','Compare 10 products across stores.',s=>s.compared>=10,s=>[s.compared,10]],
+ ['bank','🏦','Nothing slips through','Import a bank statement.',s=>s.bankImports>=1,null]];
+function vTrophies(){const st=stats();
+ return `<div class="card"><h2>${T('Streaks & trophies')}</h2><div class="grid2"><div class="stat"><div class="tiny mute">${T('Trips under the cap in a row')}</div><div class="v">🔥 ${st.streak}</div><div class="tiny mute">${T('best: {0}',st.bestStreak)}</div></div>
+ <div class="stat"><div class="tiny mute">${T('Months with the goal reached')}</div><div class="v">🎯 ${st.goalHits}</div><div class="tiny mute">${T('in a row: {0}',st.goalStreak)}</div></div>
+ <div class="stat"><div class="tiny mute">${T('Saved since you started')}</div><div class="v">${fmt(st.savedPast)}</div><div class="tiny mute">${T('+ {0} this month so far',fmt(st.savedNow))}</div></div>
+ <div class="stat"><div class="tiny mute">${T('Products compared')}</div><div class="v">🔎 ${st.compared}</div></div></div></div>
+ <div class="card">${TROPHIES.map(t=>{const ok=t[4](st),pr=!ok&&t[5]?t[5](st):null;return `<div class="row" style="${ok?'':'opacity:.45'}"><span style="display:flex;gap:12px;align-items:center"><span style="font-size:26px;${ok?'':'filter:grayscale(1)'}">${t[1]}</span><span><b>${esc(T(t[2]))}</b><br><span class="tiny mute">${esc(T(t[3]))}</span></span></span><span class="tiny mute">${ok?'✓':pr?`${t[0].startsWith('save')?fmt(Math.min(pr[0],pr[1])):Math.min(pr[0],pr[1])} / ${t[0].startsWith('save')?fmt(pr[1]):pr[1]}`:''}</span></div>`}).join('')}</div>
+ <div class="tiny mute" style="text-align:center;margin-bottom:12px">${T('Savings count once a month is over.')}</div>`}
+
 function vHistory(){const by={};for(const e of S.entries){(by[mkey(e.date)]=by[mkey(e.date)]||[]).push(e)}
  const ms=Object.keys(by).sort().reverse();
  if(!ms.length)return `<div class="card"><h2>${T('History')}</h2><div class="mute small">${T('No tickets yet.')}</div></div>`;
  return ms.map(m=>{const es=by[m].sort((a,b)=>a.date<b.date?1:-1);return `<div class="card"><div class="row" style="padding:0 0 8px"><h2 style="margin:0">${mname(m)}</h2><span class="num">${fmt(es.reduce((a,e)=>a+e.total,0))}</span></div>
- ${es.map(e=>`<div class="entry"><div class="head" data-act="open" data-id="${e.id}"><span>${esc(e.store||T('Ticket'))} <span class="mute small">${dshort(e.date)}</span>${e.kind==='online'?`<span class="tag">${T('online')}</span>`:e.kind==='bank'?`<span class="tag">${T('bank')}</span>`:e.cap!=null?`<span class="tag ${e.total<=e.cap?'ok':'no'}">${e.total<=e.cap?T('under {0}',fmt(e.cap)):T('over {0}',fmt(e.cap))}</span>`:''}</span><span class="num">${fmt(e.total)}</span></div>
+ ${es.map(e=>`<div class="entry"><div class="head" data-act="open" data-id="${e.id}"><span>${esc(e.store||T('Ticket'))} <span class="mute small">${dshort(e.date)}</span>${e.review?`<span class="tag no">${T('to check')}</span>`:''}${e.kind==='online'?`<span class="tag">${T('online')}</span>`:e.kind==='bank'?`<span class="tag">${T('bank')}</span>`:e.cap!=null?`<span class="tag ${e.total<=e.cap?'ok':'no'}">${e.total<=e.cap?T('under {0}',fmt(e.cap)):T('over {0}',fmt(e.cap))}</span>`:''}</span><span class="num">${fmt(e.total)}</span></div>
  ${ui.open===e.id?`<div style="margin-top:8px">${e.items.map(i=>`<div class="row small"><span>${esc(i.name)} <span class="tag">${esc(catName(i.cat))}</span></span><span class="num">${fmt(i.price)}</span></div>`).join('')}
- <div class="btns">${ui.del===e.id?`<span class="small">${T('Delete this ticket?')}</span><button class="ghost" data-act="delyes" data-id="${e.id}" style="color:var(--bad)">${T('Delete')}</button><button class="link" data-act="delno">${T('Cancel')}</button>`:`<button class="link" data-act="del" data-id="${e.id}">${T('Delete ticket')}</button>`}</div></div>`:''}</div>`).join('')}</div>`}).join('')}
+ <div class="btns">${ui.del===e.id?`<span class="small">${T('Delete this ticket?')}</span><button class="ghost" data-act="delyes" data-id="${e.id}" style="color:var(--bad)">${T('Delete')}</button><button class="link" data-act="delno">${T('Cancel')}</button>`:`<button class="link" data-act="edit" data-id="${e.id}">${e.review?T('Check & edit'):T('Edit')}</button><button class="link" data-act="del" data-id="${e.id}">${T('Delete ticket')}</button>`}</div></div>`:''}</div>`).join('')}</div>`}).join('')}
 
 function billRows(placeholder){return S.bills.map(b=>`<div class="bill"><input data-bill="name" data-id="${b.id}" value="${esc(b.name)}"><input class="num" inputmode="decimal" data-bill="amount" data-id="${b.id}" value="${placeholder&&!b.amount?'':b.amount}" placeholder="€"><select data-bill="freq" data-id="${b.id}">${FREQ.map(k=>`<option value="${k}" ${b.freq===k?'selected':''}>${esc(freqName(k))}</option>`).join('')}</select><button class="link" data-act="brm" data-id="${b.id}">×</button>
  ${b.freq!=='m'?`<label class="tiny mute" style="grid-column:1/2;align-self:center;text-align:right">${T('Next payment')}</label><input type="date" data-bill="due" data-id="${b.id}" value="${esc(b.due||'')}" style="grid-column:2/4;padding:6px 8px">`:''}</div>`).join('')}
@@ -288,23 +346,46 @@ function toDraft(j,kind){const items=(Array.isArray(j&&j.items)?j.items:[]).map(
  const d=/^\d{4}-\d{2}-\d{2}$/.test(j&&j.date)?j.date:today();
  return{store:String((j&&j.store)||''),date:d,kind:(j&&j.kind==='online')||kind==='online'?'online':'shop',items:items.length?items:[{name:'',price:'',cat:'groceries',pref:'need',qty:1}],total:j&&j.total!=null?r2(num(j.total)):''}}
 async function parse(body,kind){ui.busy=true;ui.err='';render();
- try{const j=await api('/api/scan',{method:'POST',body:{prompt:PARSE,...body}});ui.draft=toDraft(j,kind)}
- catch(e){ui.err=e.status===429?e.message:e.offline?T('You\'re offline. Enter the ticket by hand, or scan it when you\'re back online.'):T('Couldn\'t read that ticket. Try a sharper, flatter photo, or enter it by hand.')}
+ try{const j=await api('/api/scan',{method:'POST',body:{prompt:PARSE,...body}});ui.draft=toDraft(j,kind);ui.photos=[]}
+ catch(e){if(e.offline){await queueAdd({...body,kind});ui.photos=[];ui.err=T('You\'re offline. Saved: it will be read automatically when you\'re back online.')}
+  else ui.err=e.status===429?e.message:T('Couldn\'t read that ticket. Try a sharper, flatter photo, or enter it by hand.')}
  ui.busy=false;render()}
 
 function afterSpend(){const a=checkAlerts();if(a&&S.flash)S.flash.alert=a}
-function saveDraft(){const d=ui.draft;const items=d.items.filter(i=>String(i.name).trim()||num(i.price)).map(i=>({name:String(i.name).trim()||T('Item'),price:r2(num(i.price)),cat:i.cat,pref:i.pref,...(i.gen?{gen:i.gen}:{}),...(i.qty>1?{qty:i.qty}:{})}));
+function commitDraft(d,auto){const items=d.items.filter(i=>String(i.name).trim()||num(i.price)).map(i=>({name:String(i.name).trim()||T('Item'),price:r2(num(i.price)),cat:i.cat,pref:i.pref,...(i.gen?{gen:i.gen}:{}),...(i.qty>1?{qty:i.qty}:{})}));
  const sum=r2(items.reduce((a,i)=>a+i.price,0)),total=d.total===''||d.total==null?sum:r2(num(d.total));
- if(!items.length&&!total){ui.err=T('Add at least one line or a total.');return render()}
- for(const i of items)S.prefs[norm(i.name)]=i.pref;
- const e={id:uid(),date:d.date||today(),store:String(d.store).trim(),kind:d.kind,items,total};
+ if(!items.length&&!total)return null;
+ if(!auto)for(const i of items)S.prefs[norm(i.name)]=i.pref;
+ if(d.editId){const e=S.entries.find(x=>x.id===d.editId);if(!e)return null;Object.assign(e,{date:d.date||e.date,store:String(d.store).trim(),kind:d.kind,items,total});delete e.review;S.flash={at:Date.now(),kind:'edit',total};return e}
+ const e={id:uid(),date:d.date||today(),store:String(d.store).trim(),kind:d.kind,items,total};if(auto)e.review=true;
  const mk=mkey();
  if(e.kind==='shop'&&mkey(e.date)===mk){const cap=tripCap();e.cap=cap;const under=total<=cap;S.cur.level=under?S.cur.level+1:Math.max(0,S.cur.level-1);
   const over=r2(total-cap);S.flash={at:Date.now(),kind:'shop',total,cap,under,next:tripCap(),cuts:under?[]:cutsFor(items,over).cuts.map(c=>({name:c.name,price:c.price}))}}
  else S.flash={at:Date.now(),kind:'online',total,left:0};
  S.entries.push(e);if(S.flash.kind==='online')S.flash.left=r2(living(mk)-spentIn(mk));
  const bought=new Set(items.map(i=>norm(i.name)));if(e.kind==='shop')S.list=S.list.filter(l=>!(l.done||bought.has(norm(l.name))));
- afterSpend();ui.draft=null;ui.err='';persist();location.hash='overview';render()}
+ if(auto)S.flash={at:Date.now(),kind:'auto',store:e.store,total};
+ afterSpend();return e}
+function saveDraft(){const e=commitDraft(ui.draft,false);if(!e){ui.err=T('Add at least one line or a total.');return render()}
+ ui.draft=null;ui.err='';ui.photos=[];persist();location.hash='overview';render()}
+function editEntry(id){const e=S.entries.find(x=>x.id===id);if(!e)return;ui.draft={editId:e.id,store:e.store||'',date:e.date,kind:e.kind==='bank'?'online':e.kind,items:e.items.map(i=>({...i,qty:i.qty||1})),total:Math.abs(e.items.reduce((x,i)=>x+i.price,0)-e.total)<0.01?'':e.total};location.hash='scan';render()}
+
+/* ---------- photos & offline queue ---------- */
+const online=()=>typeof navigator==='undefined'||navigator.onLine!==false;
+const QDB={p:null,open(){if(!this.p)this.p=new Promise((res,rej)=>{try{const r=indexedDB.open('spare',1);r.onupgradeneeded=()=>r.result.createObjectStore('queue',{keyPath:'id'});r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)}catch(e){rej(e)}});return this.p},
+ async run(mode,fn){const db=await this.open();return new Promise((res,rej)=>{const t=db.transaction('queue',mode),q=fn(t.objectStore('queue'));t.oncomplete=()=>res(q&&q.result);t.onerror=()=>rej(t.error)})},
+ put(x){return this.run('readwrite',s=>s.put(x))},all(){return this.run('readonly',s=>s.getAll())},del(id){return this.run('readwrite',s=>s.delete(id))}};
+async function refreshQueue(){try{ui.queue=((await QDB.all())||[]).sort((a,b)=>a.at-b.at)}catch(e){ui.queue=ui.queue||[]}}
+async function queueAdd(item){item={id:uid(),at:Date.now(),date:today(),...item};try{await QDB.put(item)}catch(e){ui.queue.push(item)}await refreshQueue();if(!ui.queue.find(q=>q.id===item.id))ui.queue.push(item)}
+async function queueDel(id){try{await QDB.del(id)}catch(e){}ui.queue=ui.queue.filter(q=>q.id!==id);await refreshQueue()}
+let qBusy=false;
+async function processQueue(){if(qBusy||!AUTH.token||!online())return;await refreshQueue();const todo=ui.queue.filter(q=>!q.failed);if(!todo.length)return;qBusy=true;render();
+ for(const it of todo){try{const j=await api('/api/scan',{method:'POST',body:{prompt:PARSE,...(it.images?{images:it.images}:{text:it.text})}});
+   const d=toDraft(j,it.kind);if(!(j&&/^\d{4}-\d{2}-\d{2}$/.test(j.date)))d.date=it.date;
+   const e=commitDraft(d,true);if(e)persist();await queueDel(it.id)}
+  catch(e){if(e.offline||e.status===429)break;it.failed=true;try{await QDB.put(it)}catch(x){}}}
+ qBusy=false;await refreshQueue();render()}
+async function addPhotos(files){for(const f of [...files].slice(0,4-ui.photos.length)){try{ui.photos.push(await toDataURL(await shrink(f)))}catch(e){}}ui.err='';render()}
 
 /* ---------- bank import ---------- */
 function loadScript(src){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=src;s.onload=res;s.onerror=rej;document.head.appendChild(s)})}
@@ -368,6 +449,17 @@ $.addEventListener('click',ev=>{const t=ev.target.closest('[data-act]');if(!t||t
  else if(a==='bkall'||a==='bknone'){ui.bank.rows.forEach(r=>r.inc=a==='bkall');render()}
  else if(a==='bkmonth'){const mk=mkey();ui.bank.rows.forEach(r=>r.inc=mkey(r.date)===mk&&(!r.why||r.why==='cash'));render()}
  else if(a==='bkgo')importBank();
+ else if(a==='phrm'){ui.photos.splice(i,1);render()}
+ else if(a==='phclear'){ui.photos=[];render()}
+ else if(a==='phread'){if(ui.photos.length)parse({images:[...ui.photos]},'shop')}
+ else if(a==='phlater'){const imgs=[...ui.photos];ui.photos=[];queueAdd({images:imgs,kind:'shop'}).then(()=>{ui.err='';render();processQueue()})}
+ else if(a==='qdel'){queueDel(id).then(render)}
+ else if(a==='qretry'){const q=ui.queue.find(x=>x.id===id);if(q){q.failed=false;(async()=>{try{await QDB.put(q)}catch(e){}processQueue()})()}}
+ else if(a==='qhand'){queueDel(id).then(()=>{ui.draft={store:'',date:today(),kind:'shop',items:[{name:'',price:'',qty:1,cat:'groceries',pref:'need'}],total:''};render()})}
+ else if(a==='edit')editEntry(id);
+ else if(a==='trophyok'){const st=stats();S.trophiesSeen=TROPHIES.filter(t=>t[4](st)).map(t=>t[0]);persist();render()}
+ else if(a==='storedone'){const PI=priceIndex(),cart=S.list.filter(x=>x.done);ui.draft={store:ui.storeName||'',date:today(),kind:'shop',items:cart.map(x=>{const p=findProd(PI,x.name),src=p&&S.entries.flatMap(e=>e.items).find(it=>prodKey(it)===p.key);const cat=src?src.cat:'groceries';return{name:x.name,price:num(x.price),qty:1,cat,pref:x.pref,gen:p?p.key:''}}),total:''};location.hash='scan';render()}
+ else if(a==='storescan'){location.hash='scan';render()}
  else if(a==='bkcancel'){ui.bank=null;render()}
  else if(a==='lpref'){const it=S.list.find(x=>x.id===id);it.pref=it.pref==='need'?'want':'need';S.prefs[norm(it.name)]=it.pref;persist();render()}
  else if(a==='lrm'){S.list=S.list.filter(x=>x.id!==id);persist();render()}
@@ -385,7 +477,9 @@ $.addEventListener('click',ev=>{const t=ev.target.closest('[data-act]');if(!t||t
   if(typeof s.notice==='string')s.notice=null;S=migrate(s);ui.imp=false;persist();render()}catch(e){const x=document.getElementById('impt');if(x)x.style.borderColor='var(--bad)'}}
 });
 $.addEventListener('change',ev=>{const t=ev.target;
- if(t.dataset.act==='file'&&t.files&&t.files[0]){shrink(t.files[0]).then(toDataURL).then(img=>parse({image:img},'shop'));return}
+ if(t.dataset.act==='file'&&t.files&&t.files.length){addPhotos(t.files);return}
+ if(t.dataset.act==='cart'){const it=S.list.find(x=>x.id===t.dataset.id);if(it){it.done=t.checked;persist();render()}return}
+ if(t.dataset.act==='storename'){ui.storeName=t.value;render();return}
  if(t.dataset.act==='bankfile'&&t.files&&t.files[0]){bankFile(t.files[0]);return}
  if(t.dataset.act==='lang'){setLang(t.value);return}
  if(t.dataset.act==='bk'){ui.bank.rows[+t.dataset.i].inc=t.checked;render();return}
@@ -435,7 +529,7 @@ async function pull(){if(!AUTH.token)return;try{const r=await api('/api/state');
    S=hadLocal&&AUTH.serverAt!==r.updatedAt?mergeStates(local,migrate(r.data)):migrate(r.data);AUTH.serverAt=r.updatedAt;saveAuth();rollover();localSave();
    sync='synced';render();if(hadLocal&&S.updatedAt>r.updatedAt)schedulePush(0)}
   else{sync='synced';render();schedulePush(0)}
-  scheduleNotifs()}
+  scheduleNotifs();processQueue()}
  catch(e){sync=e.offline?'offline':sync;if(ui.pulling){ui.pulling=false;render()}status()}}
 
 function schedulePush(delay=900){if(!AUTH.token)return;clearTimeout(pubT);sync='saving';status();pubT=setTimeout(push,delay)}
@@ -444,7 +538,7 @@ async function push(tries=0){try{const r=await api('/api/state',{method:'PUT',bo
   if(r.updatedAt){AUTH.serverAt=r.updatedAt;saveAuth();sync='synced'}status()}
  catch(e){sync=e.offline?'offline':'error';status();clearTimeout(pubT);pubT=setTimeout(push,30000)}}
 
-if(typeof window.addEventListener==='function')window.addEventListener('online',()=>AUTH.token&&schedulePush(0));
+if(typeof window.addEventListener==='function'){window.addEventListener('online',()=>{if(AUTH.token){schedulePush(0);processQueue()}render()});window.addEventListener('offline',()=>render())}
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&AUTH.token&&sync!=='saving')pull()});
 
 function toDataURL(blob){return new Promise((res,rej)=>{const fr=new FileReader();fr.onload=()=>res(fr.result);fr.onerror=rej;fr.readAsDataURL(blob)})}
@@ -530,4 +624,4 @@ if($)$.addEventListener('click',async ev=>{const t=ev.target.closest('[data-act]
  else if(a==='logout'){try{await api('/api/logout',{method:'POST'})}catch(e){}const ln=LN();if(ln)try{const p=await ln.getPending();if(p.notifications.length)await ln.cancel({notifications:p.notifications.map(n=>({id:n.id}))})}catch(e){}
   AUTH.token=null;AUTH.serverAt=0;AUTH.admin=false;ui.admin=null;saveAuth();try{localStorage.removeItem(LSK)}catch(e){}S=defaults();rollover();render()}});
 
-load();rollover();render();if(AUTH.token){pull();notifAllowed(false).then(()=>{if(view()==='settings')render()})}
+load();rollover();refreshQueue().then(render);render();if(AUTH.token){pull();notifAllowed(false).then(()=>{if(view()==='settings')render()})}
