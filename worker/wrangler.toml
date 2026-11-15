@@ -1,0 +1,24 @@
+name = "spare"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+
+# The web app (PC version) is served from ../web by the same Worker.
+[assets]
+directory = "../web"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "spare"
+# Replaced automatically by the GitHub Action from the D1_DATABASE_ID secret.
+database_id = "D1_DATABASE_ID_PLACEHOLDER"
+
+# Reads receipt photos (free daily allowance on Workers AI).
+[ai]
+binding = "AI"
+
+[vars]
+# Set to "false" once you've created your account(s) to stop new sign-ups.
+ALLOW_SIGNUP = "true"
+
+# Optional: serve on your own domain instead of spare.<you>.workers.dev
+# routes = [{ pattern = "spare.watchtvrabbit.dev", custom_domain = true }]

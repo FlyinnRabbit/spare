@@ -1,0 +1,103 @@
+name: Android APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - "resources/**"
+      - "capacitor.config.json"
+      - "package.json"
+      - "android-signing/**"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Point the app at your Worker
+        env:
+          SPARE_API_URL: ${{ vars.SPARE_API_URL }}
+        run: |
+          if [ -z "$SPARE_API_URL" ]; then
+            echo "::warning::Repository variable SPARE_API_URL is not set. The app will ask for the server address at first launch."
+          fi
+          printf 'window.SPARE_API = "%s";\n' "${SPARE_API_URL%/}" > web/config.js
+          cat web/config.js
+
+      - name: Install Capacitor
+        run: npm install --no-audit --no-fund
+
+      - name: Create Android project
+        run: npx cap add android
+
+      - name: App icon
+        continue-on-error: true
+        run: >
+          npx --yes @capacitor/assets@3 generate --android --assetPath resources
+          --iconBackgroundColor '#1f7a52' --iconBackgroundColorDark '#1f7a52'
+          --splashBackgroundColor '#f5f2ec' --splashBackgroundColorDark '#151412'
+
+      - name: Allow the camera (for scanning tickets)
+        run: |
+          sed -i 's#</manifest>#    <uses-permission android:name="android.permission.CAMERA" />\n</manifest>#' android/app/src/main/AndroidManifest.xml
+          grep -n "permission" android/app/src/main/AndroidManifest.xml
+
+      - name: Version number
+        run: |
+          sed -i -E "s/versionCode [0-9]+/versionCode ${{ github.run_number }}/; s/versionName \"[^\"]+\"/versionName \"1.0.${{ github.run_number }}\"/" android/app/build.gradle
+          grep -n "version" android/app/build.gradle
+
+      - name: Sync web files into the app
+        run: npx cap sync android
+
+      - name: Signing key (same key every build, so updates install over the old app)
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          mkdir -p ~/.android
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore
+          else
+            cp android-signing/debug.keystore ~/.android/debug.keystore
+          fi
+
+      - name: Build APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+          cp app/build/outputs/apk/debug/app-debug.apk ../Spare.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Spare-apk
+          path: Spare.apk
+
+      - name: Publish as a release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Spare 1.0.${{ github.run_number }}
+          make_latest: true
+          files: Spare.apk
+          body: |
+            Download **Spare.apk** below and open it on your phone to install (allow "install unknown apps" for your browser the first time).
+            Built from ${{ github.sha }}.

@@ -1,0 +1,8 @@
+{
+  "appId": "dev.watchtvrabbit.spare",
+  "appName": "Spare",
+  "webDir": "web",
+  "android": {
+    "allowMixedContent": false
+  }
+}
