@@ -2,14 +2,15 @@
   "name": "spare",
   "version": "1.0.0",
   "private": true,
-  "description": "Spare — receipt scanner and savings squeezer. Web app + Android (Capacitor) + Cloudflare Worker/D1 backend.",
+  "description": "Spare \u2014 receipt scanner and savings squeezer. Web app + Android (Capacitor) + Cloudflare Worker/D1 backend.",
   "scripts": {
     "android:add": "cap add android",
     "android:sync": "cap sync android"
   },
   "dependencies": {
     "@capacitor/android": "^7.0.0",
-    "@capacitor/core": "^7.0.0"
+    "@capacitor/core": "^7.0.0",
+    "@capacitor/local-notifications": "^7.0.0"
   },
   "devDependencies": {
     "@capacitor/cli": "^7.0.0"

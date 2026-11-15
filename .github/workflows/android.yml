@@ -56,9 +56,11 @@ jobs:
           --iconBackgroundColor '#111318' --iconBackgroundColorDark '#111318'
           --splashBackgroundColor '#111318' --splashBackgroundColorDark '#151412'
 
-      - name: Allow the camera (for scanning tickets)
+      - name: Permissions (camera for tickets, notifications) and notification icon
         run: |
-          sed -i 's#</manifest>#    <uses-permission android:name="android.permission.CAMERA" />\n</manifest>#' android/app/src/main/AndroidManifest.xml
+          sed -i 's#</manifest>#    <uses-permission android:name="android.permission.CAMERA" />\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n</manifest>#' android/app/src/main/AndroidManifest.xml
+          mkdir -p android/app/src/main/res/drawable
+          cp resources/android/ic_stat_spare.xml android/app/src/main/res/drawable/
           grep -n "permission" android/app/src/main/AndroidManifest.xml
 
       - name: Version number

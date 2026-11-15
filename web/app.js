@@ -1,33 +1,51 @@
+/* Spare — web app (also bundled into the Android app). */
+'use strict';
+const LSK='spare-budget-state-v1',LANGK='spare-lang';
 
-const LSK='spare-budget-state-v1';
+/* ---------- language ---------- */
+const LOCALES={fr:'fr-BE',nl:'nl-BE',en:'en-GB'};
+let LANG=(()=>{try{const l=localStorage.getItem(LANGK);if(LOCALES[l])return l}catch(e){}const n=String((typeof navigator!=='undefined'&&navigator.language)||'en').slice(0,2);return LOCALES[n]?n:'en'})();
+function T(s,...a){const d=(window.SPARE_I18N||{})[LANG];let o=(d&&d[s])||s;a.forEach((v,i)=>{o=o.split('{'+i+'}').join(v)});return o}
+const LANGNAME={fr:'Français',nl:'Nederlands',en:'English'};
+const LANGPROMPT={fr:'French',nl:'Dutch',en:'English'};
+function setLang(l){if(!LOCALES[l])return;LANG=l;try{localStorage.setItem(LANGK,l)}catch(e){}document.documentElement.lang=l;render();scheduleNotifs()}
+
+/* ---------- helpers ---------- */
 const CATS=[['groceries','Groceries','need'],['cat','Cat','need'],['household','Household','need'],['hygiene','Hygiene','need'],['snacks','Snacks & sweets','want'],['drinks','Drinks','want'],['eatout','Eating out','want'],['clothing','Clothing','want'],['tech','Tech & media','want'],['leisure','Leisure','want'],['other','Other','want']];
-const CATNAME=Object.fromEntries(CATS.map(c=>[c[0],c[1]])),CATPREF=Object.fromEntries(CATS.map(c=>[c[0],c[2]]));
-const FREQ={m:'Monthly',q:'Every 3 months',y:'Yearly'};
+const CATKEYS=new Set(CATS.map(c=>c[0])),CATPREF=Object.fromEntries(CATS.map(c=>[c[0],c[2]]));
+const catName=k=>T((CATS.find(c=>c[0]===k)||[k,k])[1]);
+const FREQ=['m','q','y'],freqName=f=>({m:T('Monthly'),q:T('Every 3 months'),y:T('Yearly')})[f];
 const uid=()=>Math.random().toString(36).slice(2,10);
 const r2=n=>Math.round((+n||0)*100)/100;
-const num=v=>{const x=parseFloat(String(v??'').replace(',','.').replace(/[^\d.\-]/g,''));return isFinite(x)?x:0};
+const num=v=>{const x=parseFloat(String(v??'').replace(/\s/g,'').replace(',','.').replace(/[^\d.\-]/g,''));return isFinite(x)?x:0};
 const EUR=new Intl.NumberFormat('fr-BE',{style:'currency',currency:'EUR'});
 const fmt=n=>EUR.format(r2(n));
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const norm=s=>String(s||'').toLowerCase().replace(/\s+/g,' ').trim();
-function today(){const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}
+const norm=s=>String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().replace(/\s+/g,' ').trim();
+const iso=d=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+const today=()=>iso(new Date());
 const mkey=ds=>String(ds||today()).slice(0,7);
-const mname=(mk,short)=>new Date(mk+'-01T12:00:00').toLocaleDateString('en-GB',short?{month:'short'}:{month:'long',year:'numeric'});
+const mname=(mk,short)=>new Date(mk+'-01T12:00:00').toLocaleDateString(LOCALES[LANG],short?{month:'short'}:{month:'long',year:'numeric'});
+const dshort=ds=>new Date(ds+'T12:00:00').toLocaleDateString(LOCALES[LANG],{day:'numeric',month:'short'});
 function daysLeft(){const d=new Date();return new Date(d.getFullYear(),d.getMonth()+1,0).getDate()-d.getDate()+1}
+const dayDiff=(a,b)=>Math.round((new Date(a+'T12:00:00')-new Date(b+'T12:00:00'))/864e5);
+function hash(s){let h=5381;for(let i=0;i<s.length;i++)h=((h<<5)+h+s.charCodeAt(i))|0;return(h>>>0).toString(36)}
 
-function defaults(){return{v:1,updatedAt:0,setupDone:false,
- settings:{income:0,target:0,monthlyStep:10,tripStep:0.5,trips:8,foodShare:75,minCap:15},
- bills:[],entries:[],deleted:[],prefs:{},list:[],cur:{month:null,level:0},months:{},tips:null,notice:null,flash:null}}
-function migrate(s){const d=defaults();if(s.setupDone===undefined)s.setupDone=(s.updatedAt||0)>0||(s.entries||[]).length>0||(s.bills||[]).length>0;for(const k in d)if(s[k]===undefined)s[k]=d[k];for(const k in d.settings)if(s.settings[k]===undefined)s.settings[k]=d.settings[k];return s}
+/* ---------- state ---------- */
+function defaults(){return{v:2,updatedAt:0,setupDone:false,
+ settings:{income:0,target:0,monthlyStep:10,tripStep:0.5,trips:8,foodShare:75,minCap:15,notif:{bills:true,weekly:true,alerts:true}},
+ bills:[],entries:[],deleted:[],prefs:{},list:[],cur:{month:null,level:0,alerted:[]},months:{},tips:null,notice:null,flash:null}}
+function migrate(s){const d=defaults();if(s.setupDone===undefined)s.setupDone=(s.updatedAt||0)>0||(s.entries||[]).length>0||(s.bills||[]).length>0;
+ for(const k in d)if(s[k]===undefined)s[k]=d[k];for(const k in d.settings)if(s.settings[k]===undefined)s.settings[k]=d.settings[k];
+ if(!s.cur.alerted)s.cur.alerted=[];return s}
 
-let S,sync='idle',pubT=null;const SAMPLE=true,canImg=true;
-let ui={draft:null,busy:false,err:'',open:null,del:null,tipsBusy:false,tipsErr:'',copied:false,imp:false};
+let S,sync='idle',pubT=null,notifT=null;
+let ui={draft:null,busy:false,err:'',open:null,del:null,tipsBusy:false,tipsErr:'',copied:false,imp:false,bank:null,bankBusy:false,bankErr:'',q:''};
 
-function load(){let emb=null,loc=null;try{emb=JSON.parse(document.getElementById('state').textContent)}catch(e){}
- try{loc=JSON.parse(localStorage.getItem(LSK))}catch(e){}
- let s=emb;if(loc&&(!s||(loc.updatedAt||0)>(s.updatedAt||0)))s=loc;S=migrate(s||defaults())}
+function load(){let loc=null;try{loc=JSON.parse(localStorage.getItem(LSK))}catch(e){}S=migrate(loc||defaults())}
 function localSave(){try{localStorage.setItem(LSK,JSON.stringify(S))}catch(e){}}
-function persist(){S.updatedAt=Date.now();localSave();schedulePush()}
+function persist(){S.updatedAt=Date.now();localSave();schedulePush();clearTimeout(notifT);notifT=setTimeout(scheduleNotifs,1500)}
+
 /* ---------- budget math ---------- */
 const billMonthly=b=>b.freq==='q'?b.amount/3:b.freq==='y'?b.amount/12:b.amount;
 const commit=()=>r2(S.bills.reduce((a,b)=>a+billMonthly(b),0));
@@ -41,37 +59,83 @@ function tripCap(){const st=S.settings,base=living(mkey())*st.foodShare/100/Math
 const prefOf=(name,cat)=>S.prefs[norm(name)]||CATPREF[cat]||'want';
 
 function rollover(){const mk=mkey();
- if(!S.cur.month){S.cur={month:mk,level:0};S.months[mk]={target:S.settings.target};return}
+ if(!S.cur.month){S.cur={month:mk,level:0,alerted:[]};S.months[mk]={target:S.settings.target};return}
  if(S.cur.month===mk){if(!S.months[mk])S.months[mk]={target:S.settings.target};return}
  const prev=S.cur.month,t=targetFor(prev),saved=savedFor(prev);
- if(saved>=t){S.settings.target=r2(S.settings.target+S.settings.monthlyStep);
-  S.notice=`${mname(prev)}: you saved ${fmt(saved)} (goal ${fmt(t)}). New goal: ${fmt(S.settings.target)} — ${fmt(S.settings.monthlyStep)} more than last month.`}
- else S.notice=`${mname(prev)}: you saved ${fmt(saved)}, short of your ${fmt(t)} goal. The goal stays at ${fmt(S.settings.target)} this month.`;
- S.cur={month:mk,level:0};S.months[mk]={target:S.settings.target};S.updatedAt=Date.now();localSave()}
+ if(saved>=t){S.settings.target=r2(S.settings.target+S.settings.monthlyStep);S.notice={k:'hit',m:prev,saved,t,n:S.settings.target,s:S.settings.monthlyStep}}
+ else S.notice={k:'miss',m:prev,saved,t,n:S.settings.target};
+ S.cur={month:mk,level:0,alerted:[]};S.months[mk]={target:S.settings.target};S.updatedAt=Date.now();localSave()}
+function noticeText(n){if(!n)return'';if(typeof n==='string')return esc(n);
+ return n.k==='hit'?T('{0}: you saved {1} (goal {2}). New goal: {3}, {4} more than last month.',mname(n.m),fmt(n.saved),fmt(n.t),fmt(n.n),fmt(n.s))
+  :T('{0}: you saved {1}, short of your {2} goal. The goal stays at {3} this month.',mname(n.m),fmt(n.saved),fmt(n.t),fmt(n.n))}
 
 function cutsFor(items,over){const w=items.filter(i=>i.pref==='want'&&i.price>0);
  const one=w.filter(i=>i.price>=over).sort((a,b)=>a.price-b.price)[0];if(one)return{cuts:[one],short:0};
  const g=[...w].sort((a,b)=>b.price-a.price),out=[];let s=0;for(const i of g){if(s>=over)break;out.push(i);s+=i.price}
  return{cuts:out,short:r2(Math.max(0,over-s))}}
 
+/* ---------- prices ---------- */
+const BRAND_RE=[['Colruyt',/colruyt/],['Okay',/\bokay\b/],['Bio-Planet',/bio.?planet/],['Delhaize',/delhaize/],['Aldi',/\baldi\b/],['Lidl',/\blidl\b/],['Carrefour',/carrefour/],['Albert Heijn',/albert heijn|\bah\b/],['Intermarché',/intermarche/],['Spar',/\bspar\b/],['Cora',/\bcora\b/],['Match',/\bs?match\b/],['Jumbo',/\bjumbo\b/],['Action',/\baction\b/],['Kruidvat',/kruidvat/],['Zooplus',/zooplus/],['Tom&Co',/tom ?& ?co/],['Maxi Zoo',/maxi ?zoo/],['Rewe',/\brewe\b/],['Edeka',/edeka/],['Amazon',/amazon/],['Bol.com',/bol\.com/]];
+function storeOf(s){const n=norm(s);if(!n)return null;for(const [name,re] of BRAND_RE)if(re.test(n))return{key:norm(name),name};const w=String(s).trim().split(/\s+/)[0];return{key:norm(w),name:w.charAt(0).toUpperCase()+w.slice(1).toLowerCase()}}
+const prodKey=it=>norm(it.gen||it.name);
+function priceIndex(){const idx={},alias={};
+ for(const e of [...S.entries].sort((a,b)=>a.date<b.date?-1:1)){if(e.kind==='bank')continue;const st=storeOf(e.store);if(!st)continue;
+  for(const it of e.items){if(!(it.price>0))continue;const k=prodKey(it);if(!k)continue;const unit=r2(it.price/(it.qty>0?it.qty:1));
+   const p=idx[k]||(idx[k]={key:k,label:it.name,stores:{},n:0});p.n++;p.label=it.name;alias[norm(it.name)]=k;
+   const s=p.stores[st.key]||(p.stores[st.key]={name:st.name,price:unit,date:e.date,n:0,min:unit});s.price=unit;s.date=e.date;s.min=Math.min(s.min,unit);s.n++}}
+ for(const p of Object.values(idx)){const ss=Object.values(p.stores).sort((a,b)=>a.price-b.price);p.best=ss[0];p.sorted=ss;p.spread=ss.length>1?r2(ss[ss.length-1].price-ss[0].price):0}
+ return{idx,alias}}
+function findProd(PI,name){const n=norm(name);return PI.idx[PI.alias[n]]||PI.idx[n]||null}
+function missedSavings(PI,mk){let t=0;for(const e of entriesIn(mk)){if(e.kind==='bank')continue;const st=storeOf(e.store);
+ for(const it of e.items){const p=PI.idx[prodKey(it)];if(!p||!p.best||!st||p.best.name===st.name)continue;const unit=it.price/(it.qty>0?it.qty:1);if(unit>p.best.price)t+=(unit-p.best.price)*(it.qty||1)}}return r2(t)}
+
 function planList(cap){const needs=S.list.filter(i=>i.pref==='need'),wants=S.list.filter(i=>i.pref!=='need');let cum=0;const res={};
  for(const i of [...needs,...wants]){const p=num(i.price);if(cum+p<=cap+1e-9){cum+=p;res[i.id]={fits:true,cum}}else res[i.id]={fits:false,short:r2(cum+p-cap)}}
  return{res,total:r2(cum),needsTotal:r2(needs.reduce((a,i)=>a+num(i.price),0)),all:r2(S.list.reduce((a,i)=>a+num(i.price),0))}}
 
-function lastPrices(){const m={};for(const e of [...S.entries].sort((a,b)=>a.date<b.date?-1:1))for(const it of e.items)m[norm(it.name)]={name:it.name,price:it.price,cat:it.cat};return m}
+/* ---------- bills: due dates ---------- */
+function nextDue(b){if(!b.due)return null;let d=new Date(b.due+'T12:00:00');const t=new Date(today()+'T12:00:00'),step=b.freq==='q'?3:b.freq==='y'?12:1;let g=0;while(d<t&&g++<400)d.setMonth(d.getMonth()+step);return iso(d)}
+function upcoming(days=14){return S.bills.map(b=>({b,d:nextDue(b)})).filter(x=>x.d&&dayDiff(x.d,today())<=days).sort((a,b)=>a.d<b.d?-1:1)}
+
+/* ---------- notifications (Android app) ---------- */
+const LN=()=>{try{return window.Capacitor&&window.Capacitor.Plugins&&window.Capacitor.Plugins.LocalNotifications||null}catch(e){return null}};
+let notifPerm=null;
+async function notifAllowed(ask){const ln=LN();if(!ln)return false;try{let p=await ln.checkPermissions();if(p.display!=='granted'&&ask)p=await ln.requestPermissions();notifPerm=p.display;return p.display==='granted'}catch(e){return false}}
+async function scheduleNotifs(){const ln=LN();if(!ln||!AUTH.token||!S.setupDone)return;if(!(await notifAllowed(false)))return;
+ try{const p=await ln.getPending();if(p.notifications.length)await ln.cancel({notifications:p.notifications.map(n=>({id:n.id}))})}catch(e){}
+ const n=S.settings.notif||{},list=[],now=new Date();
+ if(n.bills)S.bills.forEach((b,i)=>{const d=nextDue(b);if(!d)return;const at=new Date(d+'T10:00:00');at.setDate(at.getDate()-3);if(at>now)list.push({id:1000+i,title:T('{0} in 3 days',b.name),body:T('About {0} will leave your account on {1}.',fmt(b.amount),dshort(d)),schedule:{at,allowWhileIdle:true}})});
+ const mk=mkey(),left=r2(living(mk)-spentIn(mk));
+ if(n.weekly){const at=new Date();at.setDate(at.getDate()+((7-at.getDay())%7));at.setHours(18,0,0,0);if(at<=now)at.setDate(at.getDate()+7);
+  const wk=S.entries.filter(e=>dayDiff(today(),e.date)<7&&dayDiff(today(),e.date)>=0).reduce((a,e)=>a+e.total,0);
+  list.push({id:2001,title:T('Your week with Spare'),body:T('Spent this week: {0}. Left this month: {1}.',fmt(wk),fmt(left)),schedule:{at,allowWhileIdle:true}})}
+ if(n.weekly){const at=new Date(now.getFullYear(),now.getMonth()+1,0,19,0,0);if(at>now)list.push({id:2002,title:T('Last day of the month'),body:left>=0?T('You\'re on track to save {0}. Hold on until tomorrow!',fmt(targetFor(mk)+left)):T('You\'re {0} over this month. Tomorrow is a fresh start.',fmt(-left)),schedule:{at,allowWhileIdle:true}})}
+ if(list.length)try{await ln.schedule({notifications:list.map(x=>({...x,smallIcon:'ic_stat_spare',iconColor:'#f5bf3c'}))})}catch(e){}}
+function checkAlerts(){const mk=mkey(),liv=living(mk),sp=spentIn(mk);if(!(liv>0)||!(S.settings.notif||{}).alerts)return null;const pct=sp/liv*100;let hit=null;
+ for(const lvl of [100,80])if(pct>=lvl&&!S.cur.alerted.includes(lvl)){hit=lvl;break}
+ if(hit==null)return null;S.cur.alerted.push(hit);if(hit===100&&!S.cur.alerted.includes(80))S.cur.alerted.push(80);
+ const title=hit===100?T('Monthly budget used up'):T('80% of your monthly budget used'),body=hit===100?T('You\'ve spent {0} of {1}. Every extra euro now comes out of your savings.',fmt(sp),fmt(liv)):T('{0} left for {1} days.',fmt(liv-sp),daysLeft());
+ const ln=LN();if(ln)notifAllowed(false).then(ok=>ok&&ln.schedule({notifications:[{id:3000+hit,title,body,schedule:{at:new Date(Date.now()+1500)},smallIcon:'ic_stat_spare',iconColor:'#f5bf3c'}]})).catch(()=>{});
+ return{title,body}}
 
 /* ---------- render ---------- */
 const $=document.getElementById('root');
-const view=()=>{const h=location.hash.slice(1);return['overview','scan','list','history','settings'].includes(h)?h:'overview'};
-function status(){const el=document.getElementById('sync');if(el)el.innerHTML=({saving:'<span class="spin"></span>Syncing…',synced:'✓ Synced',offline:'Offline — will sync',error:'Sync problem — retrying',idle:''})[sync]||''}
-function render(){if(!AUTH.token)return renderAuth();if(ui.pulling){$.innerHTML='<div class="auth"><img src="icon-192.png" alt="" width="84" height="84" style="border-radius:20px;display:block;margin-bottom:12px"><h1>Spare</h1><div class="note warn"><span class="spin"></span>Loading your data…</div></div>';return}if(!S.setupDone)return renderSetup();const v=view();
- const nav=[['overview','◔','Overview'],['scan','⊡','Scan'],['list','☰','List'],['history','↺','History'],['settings','⚙','Settings']].map(([k,i,t])=>`<a href="#${k}" class="${v===k?'on':''}"><b>${i}</b>${t}</a>`).join('');
- $.innerHTML=`<div class="top"><h1 style="display:flex;align-items:center;gap:10px"><img src="favicon.png" alt="" width="34" height="34" style="border-radius:9px">Spare</h1><span class="status" id="sync"></span></div>${({overview:vOverview,scan:vScan,list:vList,history:vHistory,settings:vSettings})[v]()}<nav>${nav}</nav>`;status()}
+const VIEWS=['overview','scan','list','prices','history','settings'];
+const view=()=>{const h=location.hash.slice(1);return VIEWS.includes(h)?h:'overview'};
+function status(){const el=document.getElementById('sync');if(el)el.innerHTML=({saving:'<span class="spin"></span>'+T('Syncing…'),synced:'✓ '+T('Synced'),offline:T('Offline, will sync'),error:T('Sync problem, retrying'),idle:''})[sync]||''}
+const logo=(w=84)=>`<img src="icon-192.png" alt="" width="${w}" height="${w}" style="border-radius:${Math.round(w/4)}px;display:block;margin-bottom:12px">`;
+function render(){if(!$)return;document.documentElement.lang=LANG;if(!AUTH.token)return renderAuth();
+ if(ui.pulling){$.innerHTML=`<div class="auth">${logo()}<h1>Spare</h1><div class="note warn"><span class="spin"></span>${T('Loading your data…')}</div></div>`;return}
+ if(!S.setupDone)return renderSetup();const v=view();
+ const nav=[['overview','◔',T('Overview')],['scan','⊡',T('Scan')],['list','☰',T('List')],['prices','€',T('Prices')],['history','↺',T('History')],['settings','⚙',T('Settings')]].map(([k,i,t])=>`<a href="#${k}" class="${v===k?'on':''}"><b>${i}</b>${t}</a>`).join('');
+ $.innerHTML=`<div class="top"><h1 style="display:flex;align-items:center;gap:10px"><img src="favicon.png" alt="" width="34" height="34" style="border-radius:9px">Spare</h1><span class="status" id="sync"></span></div>${({overview:vOverview,scan:vScan,list:vList,prices:vPrices,history:vHistory,settings:vSettings})[v]()}<nav>${nav}</nav>`;status()}
 
-function flashHtml(){const f=S.flash;if(!f||Date.now()-f.at>10*60*1000)return'';
- if(f.kind==='online')return`<div class="note good">Saved ${fmt(f.total)} of online spending. ${fmt(f.left)} left for living this month.</div>`;
- if(f.under)return`<div class="note good"><b>Under the cap by ${fmt(f.cap-f.total)}.</b> Your next trip cap is ${fmt(f.next)} — ${fmt(S.settings.tripStep)} tighter. Keep it going.</div>`;
- return`<div class="note bad"><b>${fmt(f.total-f.cap)} over the ${fmt(f.cap)} cap.</b> ${f.cuts.length?'Leaving '+f.cuts.map(c=>esc(c.name)+' ('+fmt(c.price)+')').join(', ')+' on the shelf would have kept you under.':'Everything on it was a need — consider raising the minimum cap in Settings.'} Next cap: ${fmt(f.next)}.</div>`}
+function flashHtml(){const f=S.flash;if(!f||Date.now()-f.at>10*60*1000)return'';let h='';
+ if(f.kind==='online')h=`<div class="note good">${T('Saved {0} of spending. {1} left to live on this month.',fmt(f.total),fmt(f.left))}</div>`;
+ else if(f.kind==='bank')h=`<div class="note good">${T('Imported {0} payments ({1}) from your bank statement.',f.n,fmt(f.total))}</div>`;
+ else if(f.under)h=`<div class="note good"><b>${T('Under the cap by {0}.',fmt(f.cap-f.total))}</b> ${T('Your next trip cap is {0}, {1} tighter. Keep it going.',fmt(f.next),fmt(S.settings.tripStep))}</div>`;
+ else h=`<div class="note bad"><b>${T('{0} over the {1} cap.',fmt(f.total-f.cap),fmt(f.cap))}</b> ${f.cuts.length?T('Leaving {0} on the shelf would have kept you under.',f.cuts.map(c=>esc(c.name)+' ('+fmt(c.price)+')').join(', ')):T('Everything on it was a need. Consider raising the minimum cap in Settings.')} ${T('Next cap: {0}.',fmt(f.next))}</div>`;
+ if(f.alert)h+=`<div class="note warn"><b>${esc(f.alert.title)}</b> ${esc(f.alert.body)}</div>`;return h}
 
 function vOverview(){const mk=mkey(),inc=S.settings.income,cm=commit(),tg=targetFor(mk),liv=living(mk),sp=spentIn(mk),left=r2(liv-sp),dl=daysLeft(),cap=tripCap();
  const pct=liv>0?Math.min(100,sp/liv*100):100;
@@ -80,143 +144,231 @@ function vOverview(){const mk=mkey(),inc=S.settings.income,cm=commit(),tg=target
  for(const e of entriesIn(mk))for(const it of e.items){cats[it.cat]=(cats[it.cat]||0)+it.price;if(it.pref==='want'){wantSum+=it.price;const k=norm(it.name);wantItems[k]=wantItems[k]||{name:it.name,t:0,n:0};wantItems[k].t+=it.price;wantItems[k].n++}}
  const diff=r2(sp-entriesIn(mk).reduce((a,e)=>a+e.items.reduce((x,i)=>x+i.price,0),0));if(diff>0.01)cats.other=(cats.other||0)+diff;
  const cmax=Math.max(1,...Object.values(cats));
- const catRows=Object.entries(cats).sort((a,b)=>b[1]-a[1]).map(([c,v])=>`<div class="hbar"><span>${esc(CATNAME[c]||c)}</span><span class="t"><i class="${CATPREF[c]==='want'?'want':''}" style="width:${v/cmax*100}%"></i></span><span class="num" style="text-align:right">${fmt(v)}</span></div>`).join('');
+ const catRows=Object.entries(cats).sort((a,b)=>b[1]-a[1]).map(([c,v])=>`<div class="hbar"><span>${esc(catName(c))}</span><span class="t"><i class="${CATPREF[c]==='want'?'want':''}" style="width:${v/cmax*100}%"></i></span><span class="num" style="text-align:right">${fmt(v)}</span></div>`).join('');
  const leaks=Object.values(wantItems).sort((a,b)=>b.t-a.t).slice(0,5).map(w=>`<div class="row"><span>${esc(w.name)} <span class="mute small">×${w.n}</span></span><span class="num">${fmt(w.t)}</span></div>`).join('');
  const mks=[...new Set([...Object.keys(S.months),mk])].sort().slice(-6);const vals=mks.map(m=>({m,s:Math.max(0,m===mk?r2(inc-cm-sp):savedFor(m)),t:targetFor(m)}));const vmax=Math.max(1,...vals.map(x=>Math.max(x.s,x.t)));
  const cols=vals.map(x=>`<div class="c"><span class="num">${Math.round(x.s)}</span><i class="${x.m!==mk&&x.s<x.t?'miss':''}" style="height:${x.s/vmax*80}px;${x.m===mk?'opacity:.45':''}"></i>${mname(x.m,1)}</div>`).join('');
  const plan=planList(cap),noFit=S.list.filter(i=>plan.res[i.id]&&!plan.res[i.id].fits);
- let tips='';if(S.tips&&S.tips.items)tips=S.tips.items.map(t=>`<div class="tip"><div class="row" style="padding:0"><h3>${esc(t.title)}</h3><span class="num" style="color:var(--acc)">~${fmt(t.monthly)}/mo</span></div><div class="small mute">${esc(t.detail)}</div></div>`).join('');
- return `${S.notice?`<div class="note good">${esc(S.notice)} <button class="link" data-act="dismiss">Dismiss</button></div>`:''}${flashHtml()}
- <div class="card hero"><div class="mute small">Left to live on in ${mname(mk)}</div><div class="big ${left<0?'':''}" style="color:${left<0?'var(--bad)':'inherit'}">${fmt(left)}</div>
- <div class="bar ${left<0?'over':''}"><i style="width:${pct}%"></i></div><div class="small mute">${fmt(sp)} spent of ${fmt(liv)} · ${dl} day${dl>1?'s':''} left · <b class="num" style="color:var(--ink)">${fmt(Math.max(0,left)/dl)}</b>/day</div>
- <div class="grid2" style="margin-top:14px"><div class="stat"><div class="tiny mute">Savings goal</div><div class="v">${fmt(tg)}</div><div class="tiny mute">${left>=0?'on track':'at risk — '+fmt(-left)+' short'}</div></div>
- <div class="stat"><div class="tiny mute">Next shopping trip cap</div><div class="v">${fmt(cap)}</div><div class="tiny mute">squeeze level ${S.cur.level} · −${fmt(S.settings.tripStep)} per win</div></div></div>
- ${bonus>0?`<div class="note good small" style="margin-bottom:0">Extra saved by staying under your trip caps: <b>${fmt(bonus)}</b> on top of the goal.</div>`:''}</div>
- ${noFit.length?`<div class="card"><h2>Not affordable on your next trip</h2>${noFit.map(i=>`<div class="row"><span>${esc(i.name)}</span><span class="small" style="color:var(--bad)">short by ${fmt(plan.res[i.id].short)}</span></div>`).join('')}<div class="tiny mute" style="margin-top:6px">From your shopping list. <a href="#list">Edit list</a></div></div>`:''}
- <div class="card"><h2>Where the money goes this month</h2>${catRows||'<div class="mute small">Nothing logged yet. Scan your first receipt.</div>'}${wantSum>0?`<div class="tiny mute" style="margin-top:6px">Orange = nice-to-haves: ${fmt(wantSum)} this month.</div>`:''}</div>
- ${leaks?`<div class="card"><h2>Biggest nice-to-haves</h2>${leaks}</div>`:''}
- <div class="card"><h2>Savings by month</h2><div class="cols">${cols}</div><div class="tiny mute" style="margin-top:6px">Current month is faded (in progress). Orange = goal missed.</div></div>
- <div class="card"><h2>Your month on paper</h2>
- <div class="row"><span>Income</span><span class="num">${fmt(inc)}</span></div>
- <div class="row"><span>Monthly bills</span><span class="num">−${fmt(fixedOnly())}</span></div>
- <div class="row"><span>Set aside for water &amp; yearly subs</span><span class="num">−${fmt(cm-fixedOnly())}</span></div>
- <div class="row"><span>Savings goal</span><span class="num">−${fmt(tg)}</span></div>
- <div class="row"><b>Left to live on</b><b class="num">${fmt(liv)}</b></div>
- <div class="tiny mute" style="margin-top:6px">Shopping trips get ${S.settings.foodShare}% of that over ${S.settings.trips} trips. Hit the goal and next month's goal rises by ${fmt(S.settings.monthlyStep)}.</div></div>
- <div class="card"><div class="row" style="padding:0 0 6px"><h2 style="margin:0">Savings ideas</h2>${SAMPLE?`<button class="ghost" data-act="tips" ${ui.tipsBusy?'disabled':''}>${ui.tipsBusy?'<span class="spin"></span>Thinking…':S.tips?'Refresh':'Get ideas'}</button>`:''}</div>
- ${tips||`<div class="small mute">${SAMPLE?'AI reads your last 60 days of receipts and bills and suggests specific cuts and swaps.':'Available when the page can ask Claude.'}</div>`}${ui.tipsErr?`<div class="note bad small">${esc(ui.tipsErr)}</div>`:''}</div>`}
+ const PI=priceIndex(),missed=missedSavings(PI,mk),up=upcoming(14);
+ let tips='';if(S.tips&&S.tips.items)tips=S.tips.items.map(t=>`<div class="tip"><div class="row" style="padding:0"><h3>${esc(t.title)}</h3><span class="num" style="color:var(--acc)">~${fmt(t.monthly)}${T('/mo')}</span></div><div class="small mute">${esc(t.detail)}</div></div>`).join('');
+ return `${S.notice?`<div class="note good">${noticeText(S.notice)} <button class="link" data-act="dismiss">${T('Dismiss')}</button></div>`:''}${flashHtml()}
+ <div class="card hero"><div class="mute small">${T('Left to live on in {0}',mname(mk))}</div><div class="big" style="color:${left<0?'var(--bad)':'inherit'}">${fmt(left)}</div>
+ <div class="bar ${left<0?'over':''}"><i style="width:${pct}%"></i></div><div class="small mute">${T('{0} spent of {1}',fmt(sp),fmt(liv))} · ${dl>1?T('{0} days left',dl):T('last day')} · <b class="num" style="color:var(--ink)">${fmt(Math.max(0,left)/dl)}</b>${T('/day')}</div>
+ <div class="grid2" style="margin-top:14px"><div class="stat"><div class="tiny mute">${T('Savings goal')}</div><div class="v">${fmt(tg)}</div><div class="tiny mute">${left>=0?T('on track'):T('at risk, {0} short',fmt(-left))}</div></div>
+ <div class="stat"><div class="tiny mute">${T('Next shopping trip cap')}</div><div class="v">${fmt(cap)}</div><div class="tiny mute">${T('squeeze level {0} · −{1} per win',S.cur.level,fmt(S.settings.tripStep))}</div></div></div>
+ ${bonus>0?`<div class="note good small" style="margin-bottom:0">${T('Extra saved by staying under your trip caps: {0} on top of the goal.','<b>'+fmt(bonus)+'</b>')}</div>`:''}</div>
+ ${up.length?`<div class="card"><h2>${T('Coming up')}</h2>${up.map(x=>{const dd=dayDiff(x.d,today());return `<div class="row"><span>${esc(x.b.name)} <span class="mute small">${dd===0?T('today'):dd===1?T('tomorrow'):T('in {0} days',dd)} · ${dshort(x.d)}</span></span><span class="num">${fmt(x.b.amount)}</span></div>`}).join('')}<div class="tiny mute" style="margin-top:6px">${T('Already set aside in your monthly budget.')}</div></div>`:''}
+ ${noFit.length?`<div class="card"><h2>${T('Not affordable on your next trip')}</h2>${noFit.map(i=>`<div class="row"><span>${esc(i.name)}</span><span class="small" style="color:var(--bad)">${T('short by {0}',fmt(plan.res[i.id].short))}</span></div>`).join('')}<div class="tiny mute" style="margin-top:6px">${T('From your shopping list.')} <a href="#list">${T('Edit list')}</a></div></div>`:''}
+ ${missed>0.5?`<div class="card"><div class="row" style="padding:0"><span>${T('Paid more than the cheapest store you know this month')}</span><b class="num" style="color:var(--warn)">${fmt(missed)}</b></div><div class="tiny mute" style="margin-top:4px"><a href="#prices">${T('See where to buy what')}</a></div></div>`:''}
+ <div class="card"><h2>${T('Where the money goes this month')}</h2>${catRows||`<div class="mute small">${T('Nothing logged yet. Scan your first receipt.')}</div>`}${wantSum>0?`<div class="tiny mute" style="margin-top:6px">${T('Orange = nice-to-haves: {0} this month.',fmt(wantSum))}</div>`:''}</div>
+ ${leaks?`<div class="card"><h2>${T('Biggest nice-to-haves')}</h2>${leaks}</div>`:''}
+ <div class="card"><h2>${T('Savings by month')}</h2><div class="cols">${cols}</div><div class="tiny mute" style="margin-top:6px">${T('Current month is faded (in progress). Orange = goal missed.')}</div></div>
+ <div class="card"><h2>${T('Your month on paper')}</h2>
+ <div class="row"><span>${T('Income')}</span><span class="num">${fmt(inc)}</span></div>
+ <div class="row"><span>${T('Monthly bills')}</span><span class="num">−${fmt(fixedOnly())}</span></div>
+ <div class="row"><span>${T('Set aside for quarterly & yearly bills')}</span><span class="num">−${fmt(cm-fixedOnly())}</span></div>
+ <div class="row"><span>${T('Savings goal')}</span><span class="num">−${fmt(tg)}</span></div>
+ <div class="row"><b>${T('Left to live on')}</b><b class="num">${fmt(liv)}</b></div>
+ <div class="tiny mute" style="margin-top:6px">${T('Shopping trips get {0}% of that over {1} trips. Hit the goal and next month\'s goal rises by {2}.',S.settings.foodShare,S.settings.trips,fmt(S.settings.monthlyStep))}</div></div>
+ <div class="card"><div class="row" style="padding:0 0 6px"><h2 style="margin:0">${T('Savings ideas')}</h2><button class="ghost" data-act="tips" ${ui.tipsBusy?'disabled':''}>${ui.tipsBusy?'<span class="spin"></span>'+T('Thinking…'):S.tips?T('Refresh'):T('Get ideas')}</button></div>
+ ${tips||`<div class="small mute">${T('AI reads your last 60 days of receipts and bills and suggests specific cuts and swaps.')}</div>`}${ui.tipsErr?`<div class="note bad small">${esc(ui.tipsErr)}</div>`:''}</div>`}
 
-function vScan(){if(ui.draft)return vReview();
- return `${flashHtml()}<div class="card"><h2>Scan a receipt</h2>
- ${ui.busy?`<div class="note warn"><span class="spin"></span>Reading your receipt…</div>`:''}${ui.err?`<div class="note bad">${esc(ui.err)}</div>`:''}
- ${SAMPLE&&canImg?`<label class="drop"><input type="file" accept="image/*" capture="environment" data-act="file"><div class="ic">⊡</div><b>Take or choose a photo of the ticket</b><div class="small mute">Shop receipts or screenshots of online orders</div></label>`:`<div class="note warn small">Photo scanning needs this page to be able to ask Claude, which isn't available here. You can still paste text or enter tickets by hand.</div>`}
- </div>
- <div class="card"><h2>Online order</h2><div class="small mute">Paste the confirmation email or order summary.</div>
- <textarea id="paste" placeholder="Order #… 1× … €…"></textarea><div class="btns"><button data-act="paste" ${!SAMPLE||ui.busy?'disabled':''}>Read order</button></div></div>
- <div class="card"><h2>By hand</h2><div class="btns" style="margin-top:0"><button class="ghost" data-act="manual" data-kind="shop">Shop ticket</button><button class="ghost" data-act="manual" data-kind="online">Online purchase</button></div>
- <div class="tiny mute" style="margin-top:8px">Next shopping trip cap: <b class="num">${fmt(tripCap())}</b></div></div>`}
+function vScan(){if(ui.draft)return vReview();if(ui.bank)return vBank();
+ return `${flashHtml()}<div class="card"><h2>${T('Scan a receipt')}</h2>
+ ${ui.busy?`<div class="note warn"><span class="spin"></span>${T('Reading your receipt…')}</div>`:''}${ui.err?`<div class="note bad">${esc(ui.err)}</div>`:''}
+ <label class="drop"><input type="file" accept="image/*" capture="environment" data-act="file"><div class="ic">⊡</div><b>${T('Take or choose a photo of the ticket')}</b><div class="small mute">${T('Shop receipts or screenshots of online orders')}</div></label></div>
+ <div class="card"><h2>${T('Bank statement')}</h2><div class="small mute">${T('Export your transactions from your banking app or website and import the file. Spare adds the card and online payments you didn\'t scan, and skips bills, transfers and anything already logged.')}</div>
+ ${ui.bankBusy?`<div class="note warn"><span class="spin"></span>${T('Reading your statement…')}</div>`:''}${ui.bankErr?`<div class="note bad">${esc(ui.bankErr)}</div>`:''}
+ <label class="drop" style="margin-top:10px;padding:18px"><input type="file" accept=".csv,.txt,.xml,.ofx,.qfx,.xlsx,.xls,.sta,text/csv,text/plain,application/xml,text/xml,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" data-act="bankfile"><b>${T('Choose a statement file')}</b><div class="small mute">CSV · Excel · CAMT.053 (XML) · OFX</div></label>
+ <div class="tiny mute" style="margin-top:6px">${T('Works with KBC, Belfius, ING, BNP Paribas Fortis, Argenta, Crelan, Revolut, N26, Wise and most European banks.')}</div></div>
+ <div class="card"><h2>${T('Online order')}</h2><div class="small mute">${T('Paste the confirmation email or order summary.')}</div>
+ <textarea id="paste" placeholder="${T('Order #… 1× … €…')}"></textarea><div class="btns"><button data-act="paste" ${ui.busy?'disabled':''}>${T('Read order')}</button></div></div>
+ <div class="card"><h2>${T('By hand')}</h2><div class="btns" style="margin-top:0"><button class="ghost" data-act="manual" data-kind="shop">${T('Shop ticket')}</button><button class="ghost" data-act="manual" data-kind="online">${T('Online purchase')}</button></div>
+ <div class="tiny mute" style="margin-top:8px">${T('Next shopping trip cap:')} <b class="num">${fmt(tripCap())}</b></div></div>`}
 
+const catOpts=c=>CATS.map(([k])=>`<option value="${k}" ${k===c?'selected':''}>${esc(catName(k))}</option>`).join('');
 function draftSum(){return r2(ui.draft.items.reduce((a,i)=>a+num(i.price),0))}
 function vReview(){const d=ui.draft,sum=draftSum(),tot=d.total===''||d.total==null?sum:num(d.total),cap=tripCap(),cur=mkey(d.date)===mkey();
- const opts=c=>CATS.map(([k,n])=>`<option value="${k}" ${k===c?'selected':''}>${n}</option>`).join('');
- const rows=d.items.map((it,i)=>`<tr><td><input data-f="name" data-i="${i}" value="${esc(it.name)}"></td><td class="c"><select data-f="cat" data-i="${i}">${opts(it.cat)}</select></td><td class="p"><input class="num" inputmode="decimal" data-f="price" data-i="${i}" value="${esc(it.price)}"></td><td><button class="pill ${it.pref}" data-act="pref" data-i="${i}">${it.pref==='need'?'Need':'Want'}</button></td><td><button class="link" data-act="rmitem" data-i="${i}">×</button></td></tr>`).join('');
+ const PI=priceIndex(),st=storeOf(d.store);
+ const rows=d.items.map((it,i)=>{const p=findProd(PI,it.gen||it.name)||PI.idx[norm(it.gen||'')];const unit=num(it.price)/(it.qty>0?it.qty:1);
+  const hint=p&&p.best&&st&&p.best.name!==st.name&&unit>p.best.price+0.01?`<tr><td colspan="5" class="tiny" style="color:var(--warn);padding-top:0">${T('{0} at {1} last time ({2} less)',fmt(p.best.price),esc(p.best.name),fmt(unit-p.best.price))}</td></tr>`:'';
+  return `<tr><td><input data-f="name" data-i="${i}" value="${esc(it.name)}"></td><td class="c"><select data-f="cat" data-i="${i}">${catOpts(it.cat)}</select></td><td class="p"><input class="num" inputmode="decimal" data-f="price" data-i="${i}" value="${esc(it.price)}"></td><td><button class="pill ${it.pref}" data-act="pref" data-i="${i}">${it.pref==='need'?T('Need'):T('Want')}</button></td><td><button class="link" data-act="rmitem" data-i="${i}">×</button></td></tr>${hint}`}).join('');
  let check='';
  if(d.kind==='shop'&&cur){const over=r2(tot-cap);
-  if(over<=0)check=`<div class="note good">${fmt(-over)} under your ${fmt(cap)} cap. Saving this tightens the next trip by ${fmt(S.settings.tripStep)}.</div>`;
-  else{const c=cutsFor(d.items.map(i=>({...i,price:num(i.price)})),over);check=`<div class="note bad"><b>${fmt(over)} over your ${fmt(cap)} cap.</b> ${c.cuts.length?'Skip next time: '+c.cuts.map(x=>esc(x.name)+' ('+fmt(x.price)+')').join(', ')+'.':''}${c.short>0?' Even without every want you\'d be '+fmt(c.short)+' over.':''}</div>`}}
- return `<div class="card"><h2>Check the ticket</h2>
- <div class="grid2"><div><label class="f">Store</label><input data-f="store" value="${esc(d.store)}"></div><div><label class="f">Date</label><input type="date" data-f="date" value="${esc(d.date)}"></div></div>
- <label class="f">Type</label><select data-f="kind"><option value="shop" ${d.kind==='shop'?'selected':''}>Shopping trip (counts toward trip cap)</option><option value="online" ${d.kind==='online'?'selected':''}>Online / other spending</option></select>
- <label class="f">Items — tap Need/Want to teach the app what you can cut</label>
- <table class="items">${rows}</table><button class="link" data-act="additem">+ Add line</button>
- <div class="row" style="margin-top:8px"><span>Items add up to</span><span class="num">${fmt(sum)}</span></div>
- <div class="row"><span>Total paid</span><span style="width:110px"><input class="num" inputmode="decimal" data-f="total" value="${esc(d.total??'')}" placeholder="${sum.toFixed(2)}"></span></div>
- ${Math.abs(sum-tot)>0.01?`<div class="tiny mute">Difference of ${fmt(tot-sum)} (discounts, deposits…). The total paid is what counts.</div>`:''}
- ${check}<div class="btns"><button class="acc" data-act="save">Save ticket</button><button class="ghost" data-act="discard">Discard</button></div></div>`}
+  if(over<=0)check=`<div class="note good">${T('{0} under your {1} cap. Saving this tightens the next trip by {2}.',fmt(-over),fmt(cap),fmt(S.settings.tripStep))}</div>`;
+  else{const c=cutsFor(d.items.map(i=>({...i,price:num(i.price)})),over);check=`<div class="note bad"><b>${T('{0} over your {1} cap.',fmt(over),fmt(cap))}</b> ${c.cuts.length?T('Skip next time: {0}.',c.cuts.map(x=>esc(x.name)+' ('+fmt(x.price)+')').join(', ')):''}${c.short>0?' '+T('Even without every want you\'d be {0} over.',fmt(c.short)):''}</div>`}}
+ return `<div class="card"><h2>${T('Check the ticket')}</h2>
+ <div class="grid2"><div><label class="f">${T('Store')}</label><input data-f="store" value="${esc(d.store)}"></div><div><label class="f">${T('Date')}</label><input type="date" data-f="date" value="${esc(d.date)}"></div></div>
+ <label class="f">${T('Type')}</label><select data-f="kind"><option value="shop" ${d.kind==='shop'?'selected':''}>${T('Shopping trip (counts toward trip cap)')}</option><option value="online" ${d.kind==='online'?'selected':''}>${T('Online / other spending')}</option></select>
+ <label class="f">${T('Items: tap Need/Want to teach the app what you can cut')}</label>
+ <table class="items">${rows}</table><button class="link" data-act="additem">+ ${T('Add line')}</button>
+ <div class="row" style="margin-top:8px"><span>${T('Items add up to')}</span><span class="num">${fmt(sum)}</span></div>
+ <div class="row"><span>${T('Total paid')}</span><span style="width:110px"><input class="num" inputmode="decimal" data-f="total" value="${esc(d.total??'')}" placeholder="${sum.toFixed(2)}"></span></div>
+ ${Math.abs(sum-tot)>0.01?`<div class="tiny mute">${T('Difference of {0} (discounts, deposits…). The total paid is what counts.',fmt(tot-sum))}</div>`:''}
+ ${check}<div class="btns"><button class="acc" data-act="save">${T('Save ticket')}</button><button class="ghost" data-act="discard">${T('Discard')}</button></div></div>`}
 
-function vList(){const cap=tripCap(),p=planList(cap),lp=lastPrices();
- const items=[...S.list.filter(i=>i.pref==='need'),...S.list.filter(i=>i.pref!=='need')].map(i=>{const r=p.res[i.id]||{};return `<div class="li ${r.fits?'':'no'}"><input type="checkbox" data-act="done" data-id="${i.id}" ${i.done?'checked':''}><span class="nm">${esc(i.name)}</span><button class="pill ${i.pref}" data-act="lpref" data-id="${i.id}">${i.pref==='need'?'Need':'Want'}</button><input class="num" style="width:78px;padding:6px 8px" inputmode="decimal" data-lprice="${i.id}" value="${esc(i.price)}"><button class="link" data-act="lrm" data-id="${i.id}">×</button>${r.fits?'':`<span class="why">Doesn't fit this trip — short by ${fmt(r.short)}</span>`}</div>`}).join('');
- const dl=Object.values(lp).map(x=>`<option value="${esc(x.name)}">`).join('');
- return `<div class="card"><h2>Next trip</h2><div class="grid2"><div class="stat"><div class="tiny mute">Your cap</div><div class="v">${fmt(cap)}</div></div><div class="stat"><div class="tiny mute">What fits</div><div class="v">${fmt(p.total)}</div><div class="tiny mute">of ${fmt(p.all)} listed</div></div></div>
- ${p.needsTotal>cap?`<div class="note warn small">Your needs alone come to ${fmt(p.needsTotal)}, above the cap. Drop or swap something, or adjust the minimum cap in Settings.</div>`:''}
- <div class="small mute" style="margin-top:10px">Needs are counted first, then wants in the order you added them. Whatever doesn't fit gets struck out with the exact amount you're short.</div></div>
- <div class="card"><h2>Shopping list</h2><form data-form="add" style="display:grid;grid-template-columns:1fr 90px auto;gap:8px"><input id="lname" list="known" placeholder="Item (prices fill in from past tickets)" autocomplete="off"><input id="lprice" class="num" inputmode="decimal" placeholder="€"><button>Add</button></form><datalist id="known">${dl}</datalist>
- <div style="margin-top:10px">${items||'<div class="mute small">Empty. Add what you plan to buy.</div>'}</div>
- ${S.list.length?`<div class="btns"><button class="ghost" data-act="lclear">Clear list</button></div>`:''}</div>`}
+function vBank(){const b=ui.bank,rows=b.rows,sel=rows.filter(r=>r.inc),tot=r2(sel.reduce((a,r)=>a-r.amount,0));
+ const reason={seen:T('already imported'),scanned:T('already scanned'),bill:T('bill'),transfer:T('transfer'),cash:T('cash')};
+ const list=rows.slice(0,400).map((r,i)=>`<div class="li" style="grid-template-columns:24px 1fr auto auto;${r.inc?'':'opacity:.55'}"><input type="checkbox" data-act="bk" data-i="${i}" ${r.inc?'checked':''}><span><span class="nm">${esc(r.label)}</span><br><span class="tiny mute">${dshort(r.date)}${r.why?` · <span class="tag">${reason[r.why]}</span>`:''}</span></span><select data-bkcat="${i}" style="width:118px;padding:6px 8px;font-size:13px">${catOpts(r.cat)}</select><span class="num">${fmt(-r.amount)}</span></div>`).join('');
+ return `<div class="card"><h2>${T('Check the payments')}</h2><div class="small mute">${T('{0} file · {1} payments out · {2} incoming skipped.',esc(b.format),rows.length,b.income)}</div>
+ <div class="small mute" style="margin-top:6px">${T('Unticked: bills (already in your budget), transfers to your own accounts, and anything you already scanned or imported.')}</div>
+ <div class="btns"><button class="ghost" data-act="bkall">${T('Tick all')}</button><button class="ghost" data-act="bknone">${T('Untick all')}</button><button class="ghost" data-act="bkmonth">${T('Only this month')}</button></div>
+ <div style="margin-top:8px">${list||`<div class="mute small">${T('No outgoing payments found.')}</div>`}</div>
+ <div class="row" style="margin-top:8px"><b>${T('{0} selected',sel.length)}</b><b class="num">${fmt(tot)}</b></div>
+ <div class="btns"><button class="acc" data-act="bkgo" ${sel.length?'':'disabled'}>${T('Import {0} payments',sel.length)}</button><button class="ghost" data-act="bkcancel">${T('Cancel')}</button></div></div>`}
+
+function vList(){const cap=tripCap(),p=planList(cap),PI=priceIndex();
+ const items=[...S.list.filter(i=>i.pref==='need'),...S.list.filter(i=>i.pref!=='need')].map(i=>{const r=p.res[i.id]||{},pr=findProd(PI,i.name);
+  const cheap=pr&&pr.best?`<span class="why" style="color:var(--mute)">${pr.sorted.length>1?T('Cheapest at {0}: {1}',esc(pr.best.name),fmt(pr.best.price)):T('{0} at {1}',fmt(pr.best.price),esc(pr.best.name))}</span>`:'';
+  return `<div class="li ${r.fits?'':'no'}"><input type="checkbox" data-act="done" data-id="${i.id}" ${i.done?'checked':''}><span class="nm">${esc(i.name)}</span><button class="pill ${i.pref}" data-act="lpref" data-id="${i.id}">${i.pref==='need'?T('Need'):T('Want')}</button><input class="num" style="width:78px;padding:6px 8px" inputmode="decimal" data-lprice="${i.id}" value="${esc(i.price)}"><button class="link" data-act="lrm" data-id="${i.id}">×</button>${r.fits?cheap:`<span class="why">${T('Doesn\'t fit this trip, short by {0}',fmt(r.short))}</span>`}</div>`}).join('');
+ const stores={};for(const it of S.list){const pr=findProd(PI,it.name);if(!pr)continue;for(const s of Object.values(pr.stores)){const x=stores[s.name]||(stores[s.name]={name:s.name,t:0,n:0});x.t+=s.price;x.n++}}
+ const best=Object.values(stores).sort((a,b)=>b.n-a.n||a.t-b.t).slice(0,3);
+ const bestHtml=best.length>1?`<div class="card"><h2>${T('Best store for this list')}</h2>${best.map((s,k)=>`<div class="row"><span>${k===0?'🏆 ':''}${esc(s.name)} <span class="mute small">${T('{0} of {1} items known',s.n,S.list.length)}</span></span><span class="num">${fmt(s.t)}</span></div>`).join('')}<div class="tiny mute" style="margin-top:6px">${T('Based on the last price you paid in each store.')}</div></div>`:'';
+ const dl=Object.values(PI.idx).map(x=>`<option value="${esc(x.label)}">`).join('');
+ return `<div class="card"><h2>${T('Next trip')}</h2><div class="grid2"><div class="stat"><div class="tiny mute">${T('Your cap')}</div><div class="v">${fmt(cap)}</div></div><div class="stat"><div class="tiny mute">${T('What fits')}</div><div class="v">${fmt(p.total)}</div><div class="tiny mute">${T('of {0} listed',fmt(p.all))}</div></div></div>
+ ${p.needsTotal>cap?`<div class="note warn small">${T('Your needs alone come to {0}, above the cap. Drop or swap something, or adjust the minimum cap in Settings.',fmt(p.needsTotal))}</div>`:''}
+ <div class="small mute" style="margin-top:10px">${T('Needs are counted first, then wants in the order you added them. Whatever doesn\'t fit gets struck out with the exact amount you\'re short.')}</div></div>
+ ${bestHtml}
+ <div class="card"><h2>${T('Shopping list')}</h2><form data-form="add" style="display:grid;grid-template-columns:1fr 90px auto;gap:8px"><input id="lname" list="known" placeholder="${T('Item (prices fill in from past tickets)')}" autocomplete="off"><input id="lprice" class="num" inputmode="decimal" placeholder="€"><button>${T('Add')}</button></form><datalist id="known">${dl}</datalist>
+ <div style="margin-top:10px">${items||`<div class="mute small">${T('Empty. Add what you plan to buy.')}</div>`}</div>
+ ${S.list.length?`<div class="btns"><button class="ghost" data-act="lclear">${T('Clear list')}</button></div>`:''}</div>`}
+
+function vPrices(){const PI=priceIndex(),all=Object.values(PI.idx),mk=mkey(),missed=missedSavings(PI,mk);
+ const multi=all.filter(p=>p.sorted.length>1).sort((a,b)=>b.spread*b.n-a.spread*a.n),single=all.filter(p=>p.sorted.length===1).sort((a,b)=>b.n-a.n);
+ const row=p=>`<div class="entry" data-pk="${esc(norm(p.label+' '+p.key+' '+p.sorted.map(s=>s.name).join(' ')))}"><div class="row" style="padding:0"><span><b>${esc(p.label)}</b> <span class="tiny mute">×${p.n}</span></span><span class="num" style="color:var(--acc)">${fmt(p.best.price)}</span></div>
+  <div class="tiny mute">${p.sorted.map((s,k)=>`${k===0?'✓ ':''}${esc(s.name)} ${fmt(s.price)}${s.min<s.price-0.009?` <span title="${T('lowest seen')}">(↓${fmt(s.min)})</span>`:''}`).join(' · ')}</div>
+  ${p.sorted.length>1?`<div class="tiny" style="color:var(--warn)">${T('Save {0} each time by buying it at {1}',fmt(p.spread),esc(p.best.name))}</div>`:''}</div>`;
+ const stores={};for(const p of multi)stores[p.best.name]=(stores[p.best.name]||0)+1;const champ=Object.entries(stores).sort((a,b)=>b[1]-a[1])[0];
+ return `<div class="card"><h2>${T('Price comparison')}</h2><div class="small mute">${T('Every ticket you scan teaches Spare what each product costs in each store.')}</div>
+ <div class="grid2" style="margin-top:12px"><div class="stat"><div class="tiny mute">${T('Products tracked')}</div><div class="v">${all.length}</div><div class="tiny mute">${T('{0} seen in 2+ stores',multi.length)}</div></div>
+ <div class="stat"><div class="tiny mute">${T('Overpaid this month')}</div><div class="v" style="color:${missed>0?'var(--warn)':'inherit'}">${fmt(missed)}</div><div class="tiny mute">${T('vs the cheapest store you know')}</div></div></div>
+ ${champ?`<div class="note good small" style="margin-bottom:0">${T('{0} is cheapest for {1} of your products.',esc(champ[0]),champ[1])}</div>`:''}
+ <input id="pq" placeholder="${T('Search a product or store')}" style="margin-top:12px" value="${esc(ui.q)}"></div>
+ ${multi.length?`<div class="card"><h2>${T('Compared across stores')}</h2>${multi.map(row).join('')}</div>`:''}
+ ${single.length?`<div class="card"><h2>${T('Seen in one store')}</h2>${single.map(row).join('')}<div class="tiny mute" style="margin-top:6px">${T('Scan a ticket from another store to compare.')}</div></div>`:''}
+ ${all.length?'':`<div class="card"><div class="mute small">${T('Nothing to compare yet. Scan a few tickets from different stores.')}</div></div>`}`}
 
 function vHistory(){const by={};for(const e of S.entries){(by[mkey(e.date)]=by[mkey(e.date)]||[]).push(e)}
  const ms=Object.keys(by).sort().reverse();
- if(!ms.length)return `<div class="card"><h2>History</h2><div class="mute small">No tickets yet.</div></div>`;
+ if(!ms.length)return `<div class="card"><h2>${T('History')}</h2><div class="mute small">${T('No tickets yet.')}</div></div>`;
  return ms.map(m=>{const es=by[m].sort((a,b)=>a.date<b.date?1:-1);return `<div class="card"><div class="row" style="padding:0 0 8px"><h2 style="margin:0">${mname(m)}</h2><span class="num">${fmt(es.reduce((a,e)=>a+e.total,0))}</span></div>
- ${es.map(e=>`<div class="entry"><div class="head" data-act="open" data-id="${e.id}"><span>${esc(e.store||'Ticket')} <span class="mute small">${e.date.slice(8)}/${e.date.slice(5,7)}</span>${e.kind==='online'?'<span class="tag">online</span>':e.cap!=null?`<span class="tag ${e.total<=e.cap?'ok':'no'}">${e.total<=e.cap?'under':'over'} ${fmt(e.cap)}</span>`:''}</span><span class="num">${fmt(e.total)}</span></div>
- ${ui.open===e.id?`<div style="margin-top:8px">${e.items.map(i=>`<div class="row small"><span>${esc(i.name)} <span class="tag">${esc(CATNAME[i.cat]||i.cat)}</span></span><span class="num">${fmt(i.price)}</span></div>`).join('')}
- <div class="btns">${ui.del===e.id?`<span class="small">Delete this ticket?</span><button class="ghost" data-act="delyes" data-id="${e.id}" style="color:var(--bad)">Delete</button><button class="link" data-act="delno">Cancel</button>`:`<button class="link" data-act="del" data-id="${e.id}">Delete ticket</button>`}</div></div>`:''}</div>`).join('')}</div>`}).join('')}
+ ${es.map(e=>`<div class="entry"><div class="head" data-act="open" data-id="${e.id}"><span>${esc(e.store||T('Ticket'))} <span class="mute small">${dshort(e.date)}</span>${e.kind==='online'?`<span class="tag">${T('online')}</span>`:e.kind==='bank'?`<span class="tag">${T('bank')}</span>`:e.cap!=null?`<span class="tag ${e.total<=e.cap?'ok':'no'}">${e.total<=e.cap?T('under {0}',fmt(e.cap)):T('over {0}',fmt(e.cap))}</span>`:''}</span><span class="num">${fmt(e.total)}</span></div>
+ ${ui.open===e.id?`<div style="margin-top:8px">${e.items.map(i=>`<div class="row small"><span>${esc(i.name)} <span class="tag">${esc(catName(i.cat))}</span></span><span class="num">${fmt(i.price)}</span></div>`).join('')}
+ <div class="btns">${ui.del===e.id?`<span class="small">${T('Delete this ticket?')}</span><button class="ghost" data-act="delyes" data-id="${e.id}" style="color:var(--bad)">${T('Delete')}</button><button class="link" data-act="delno">${T('Cancel')}</button>`:`<button class="link" data-act="del" data-id="${e.id}">${T('Delete ticket')}</button>`}</div></div>`:''}</div>`).join('')}</div>`}).join('')}
+
+function billRows(placeholder){return S.bills.map(b=>`<div class="bill"><input data-bill="name" data-id="${b.id}" value="${esc(b.name)}"><input class="num" inputmode="decimal" data-bill="amount" data-id="${b.id}" value="${placeholder&&!b.amount?'':b.amount}" placeholder="€"><select data-bill="freq" data-id="${b.id}">${FREQ.map(k=>`<option value="${k}" ${b.freq===k?'selected':''}>${esc(freqName(k))}</option>`).join('')}</select><button class="link" data-act="brm" data-id="${b.id}">×</button>
+ ${b.freq!=='m'?`<label class="tiny mute" style="grid-column:1/2;align-self:center;text-align:right">${T('Next payment')}</label><input type="date" data-bill="due" data-id="${b.id}" value="${esc(b.due||'')}" style="grid-column:2/4;padding:6px 8px">`:''}</div>`).join('')}
 
 function vSettings(){const s=S.settings,f=(k,l,h)=>`<div><label class="f">${l}</label><input class="num" inputmode="decimal" data-set="${k}" value="${s[k]}">${h?`<div class="tiny mute">${h}</div>`:''}</div>`;
- const bills=S.bills.map(b=>`<div class="bill"><input data-bill="name" data-id="${b.id}" value="${esc(b.name)}"><input class="num" inputmode="decimal" data-bill="amount" data-id="${b.id}" value="${b.amount}"><select data-bill="freq" data-id="${b.id}">${Object.entries(FREQ).map(([k,v])=>`<option value="${k}" ${b.freq===k?'selected':''}>${v}</option>`).join('')}</select><button class="link" data-act="brm" data-id="${b.id}">×</button></div>`).join('');
- return accountCard()+(AUTH.admin?adminCard():'')+`<div class="card"><h2>Money</h2><div class="grid2">${f('income','Monthly income (€)')}${f('target','Savings goal this month (€)')}${f('monthlyStep','Goal rises by (€) after a good month')}${f('tripStep','Trip cap shrinks by (€) per win')}${f('trips','Shopping trips per month')}${f('foodShare','% of living money for trips')}${f('minCap','Never squeeze a trip below (€)')}</div><div class="tiny mute" style="margin-top:8px">Changes save as you leave each field.</div></div>
- <div class="card"><h2>Bills</h2>${bills}<button class="link" data-act="badd">+ Add bill</button><div class="row" style="margin-top:8px"><span>Monthly equivalent</span><b class="num">${fmt(commit())}</b></div></div>
- <div class="card"><h2>Backup</h2><div class="small mute">Copy your data to keep it somewhere safe, or paste a backup to restore it.</div><div class="btns"><button class="ghost" data-act="export">${ui.copied?'Copied ✓':'Copy backup'}</button><button class="ghost" data-act="imp">Restore…</button></div>
- ${ui.imp?`<textarea id="impt" placeholder="Paste backup here"></textarea><div class="btns"><button data-act="impgo">Restore this backup</button></div>`:''}</div>`}
+ const n=s.notif||{},ln=LN(),tg=(k,l,h)=>`<label class="row" style="cursor:pointer"><span>${l}<br><span class="tiny mute">${h}</span></span><input type="checkbox" data-notif="${k}" ${n[k]?'checked':''} style="width:20px;height:20px"></label>`;
+ return accountCard()+(AUTH.admin?adminCard():'')+`<div class="card"><h2>${T('Language')}</h2><select data-act="lang">${Object.keys(LOCALES).map(l=>`<option value="${l}" ${l===LANG?'selected':''}>${LANGNAME[l]}</option>`).join('')}</select></div>
+ <div class="card"><h2>${T('Notifications')}</h2>${ln?`${notifPerm==='denied'?`<div class="note warn small">${T('Notifications are blocked for Spare. Allow them in your phone\'s settings.')}</div>`:notifPerm!=='granted'?`<div class="btns" style="margin-top:0"><button data-act="notifon">${T('Turn on notifications')}</button></div>`:''}
+ ${tg('bills',T('Bill reminders'),T('3 days before a quarterly or yearly bill (set its next payment date below).'))}${tg('weekly',T('Weekly summary'),T('Sunday evening, plus a reminder on the last day of the month.'))}${tg('alerts',T('Budget alerts'),T('When you\'ve used 80% and 100% of your money for the month.'))}`
+ :`<div class="small mute">${T('Notifications work in the Android app. Here on the website you\'ll see upcoming bills and alerts on the overview.')}</div>`}</div>
+ <div class="card"><h2>${T('Money')}</h2><div class="grid2">${f('income',T('Monthly income (€)'))}${f('target',T('Savings goal this month (€)'))}${f('monthlyStep',T('Goal rises by (€) after a good month'))}${f('tripStep',T('Trip cap shrinks by (€) per win'))}${f('trips',T('Shopping trips per month'))}${f('foodShare',T('% of living money for trips'))}${f('minCap',T('Never squeeze a trip below (€)'))}</div><div class="tiny mute" style="margin-top:8px">${T('Changes save as you leave each field.')}</div></div>
+ <div class="card"><h2>${T('Bills')}</h2>${billRows()}<button class="link" data-act="badd">+ ${T('Add bill')}</button><div class="row" style="margin-top:8px"><span>${T('Monthly equivalent')}</span><b class="num">${fmt(commit())}</b></div></div>
+ <div class="card"><h2>${T('Backup')}</h2><div class="small mute">${T('Copy your data to keep it somewhere safe, or paste a backup to restore it.')}</div><div class="btns"><button class="ghost" data-act="export">${ui.copied?T('Copied ✓'):T('Copy backup')}</button><button class="ghost" data-act="imp">${T('Restore…')}</button></div>
+ ${ui.imp?`<textarea id="impt" placeholder="${T('Paste backup here')}"></textarea><div class="btns"><button data-act="impgo">${T('Restore this backup')}</button></div>`:''}</div>`}
 
-/* ---------- actions ---------- */
+/* ---------- receipt scanning ---------- */
 async function shrink(file){try{const bmp=await createImageBitmap(file),m=1600,sc=Math.min(1,m/Math.max(bmp.width,bmp.height));const c=document.createElement('canvas');c.width=Math.round(bmp.width*sc);c.height=Math.round(bmp.height*sc);c.getContext('2d').drawImage(bmp,0,0,c.width,c.height);return await new Promise(r=>c.toBlob(b=>r(b||file),'image/jpeg',.85))}catch(e){return file}}
-const PARSE=`You read a shopping receipt or an online order confirmation from Belgium (prices in EUR; text may be French, Dutch or English).
+const PARSE=`You read a shopping receipt or an online order confirmation from Europe (prices in EUR; text may be French, Dutch, German or English).
 Return ONLY a JSON object, no prose:
-{"store":string,"date":"YYYY-MM-DD" or null,"kind":"shop" or "online","items":[{"name":string,"price":number,"category":string}],"total":number}
+{"store":string,"date":"YYYY-MM-DD" or null,"kind":"shop" or "online","items":[{"name":string,"generic":string,"qty":number,"price":number,"category":string}],"total":number}
 Rules:
-- "name": short readable product name (keep brand if shown, e.g. "Boni milk 1L").
+- "store": the shop's brand name (e.g. "Colruyt", "Aldi", "Delhaize").
+- "name": short readable product name as printed, keep brand if shown (e.g. "Boni lait demi-écrémé 1L").
+- "generic": the same product described generically in lowercase English with size, no brand, so the same product can be matched across stores (e.g. "semi-skimmed milk 1l", "cat food wet 12x85g", "bananas 1kg").
+- "qty": number of units on that line (1 if not shown; for weighed goods use 1).
 - "price": what was actually paid for that line (quantity × unit price, minus any discount printed right under it). Negative only for a stand-alone discount line.
 - "category": one of ${CATS.map(c=>c[0]).join(', ')}. Pet food/litter = cat. Alcohol, soda, juice, coffee = drinks. Chips, chocolate, cookies, candy = snacks. Restaurant/takeaway = eatout.
-- "total": the final amount paid (TOTAL / À PAYER / TE BETALEN). Ignore VAT tables, payment card lines, loyalty points, change given.
+- "total": the final amount paid (TOTAL / À PAYER / TE BETALEN / SUMME). Ignore VAT tables, payment card lines, loyalty points, change given.
 - "kind": "online" for web orders/confirmation emails, otherwise "shop".`;
-function toDraft(j,kind){const items=(Array.isArray(j&&j.items)?j.items:[]).map(i=>{const cat=CATNAME[i.category]?i.category:'other';return{name:String(i.name||'Item'),price:r2(num(i.price)),cat,pref:prefOf(i.name,cat)}});
+function toDraft(j,kind){const items=(Array.isArray(j&&j.items)?j.items:[]).map(i=>{const cat=CATKEYS.has(i.category)?i.category:'other';return{name:String(i.name||'Item'),gen:i.generic?String(i.generic).toLowerCase():'',qty:+i.qty>0?+i.qty:1,price:r2(num(i.price)),cat,pref:prefOf(i.name,cat)}});
  const d=/^\d{4}-\d{2}-\d{2}$/.test(j&&j.date)?j.date:today();
- return{store:String((j&&j.store)||''),date:d,kind:(j&&j.kind==='online')||kind==='online'?'online':'shop',items:items.length?items:[{name:'',price:'',cat:'groceries',pref:'need'}],total:j&&j.total!=null?r2(num(j.total)):''}}
+ return{store:String((j&&j.store)||''),date:d,kind:(j&&j.kind==='online')||kind==='online'?'online':'shop',items:items.length?items:[{name:'',price:'',cat:'groceries',pref:'need',qty:1}],total:j&&j.total!=null?r2(num(j.total)):''}}
 async function parse(body,kind){ui.busy=true;ui.err='';render();
  try{const j=await api('/api/scan',{method:'POST',body:{prompt:PARSE,...body}});ui.draft=toDraft(j,kind)}
- catch(e){ui.err=e.status===429?e.message:e.offline?'You\'re offline — enter the ticket by hand, or scan it when you\'re back online.':'Couldn\'t read that ticket. Try a sharper, flatter photo, or enter it by hand.'}
+ catch(e){ui.err=e.status===429?e.message:e.offline?T('You\'re offline. Enter the ticket by hand, or scan it when you\'re back online.'):T('Couldn\'t read that ticket. Try a sharper, flatter photo, or enter it by hand.')}
  ui.busy=false;render()}
 
-function saveDraft(){const d=ui.draft;const items=d.items.filter(i=>i.name.trim()||num(i.price)).map(i=>({name:i.name.trim()||'Item',price:r2(num(i.price)),cat:i.cat,pref:i.pref}));
+function afterSpend(){const a=checkAlerts();if(a&&S.flash)S.flash.alert=a}
+function saveDraft(){const d=ui.draft;const items=d.items.filter(i=>String(i.name).trim()||num(i.price)).map(i=>({name:String(i.name).trim()||T('Item'),price:r2(num(i.price)),cat:i.cat,pref:i.pref,...(i.gen?{gen:i.gen}:{}),...(i.qty>1?{qty:i.qty}:{})}));
  const sum=r2(items.reduce((a,i)=>a+i.price,0)),total=d.total===''||d.total==null?sum:r2(num(d.total));
- if(!items.length&&!total){ui.err='Add at least one line or a total.';return render()}
+ if(!items.length&&!total){ui.err=T('Add at least one line or a total.');return render()}
  for(const i of items)S.prefs[norm(i.name)]=i.pref;
- const e={id:uid(),date:d.date||today(),store:d.store.trim(),kind:d.kind,items,total};
+ const e={id:uid(),date:d.date||today(),store:String(d.store).trim(),kind:d.kind,items,total};
  const mk=mkey();
  if(e.kind==='shop'&&mkey(e.date)===mk){const cap=tripCap();e.cap=cap;const under=total<=cap;S.cur.level=under?S.cur.level+1:Math.max(0,S.cur.level-1);
   const over=r2(total-cap);S.flash={at:Date.now(),kind:'shop',total,cap,under,next:tripCap(),cuts:under?[]:cutsFor(items,over).cuts.map(c=>({name:c.name,price:c.price}))}}
  else S.flash={at:Date.now(),kind:'online',total,left:0};
  S.entries.push(e);if(S.flash.kind==='online')S.flash.left=r2(living(mk)-spentIn(mk));
  const bought=new Set(items.map(i=>norm(i.name)));if(e.kind==='shop')S.list=S.list.filter(l=>!(l.done||bought.has(norm(l.name))));
- ui.draft=null;ui.err='';persist();location.hash='overview';render()}
+ afterSpend();ui.draft=null;ui.err='';persist();location.hash='overview';render()}
 
+/* ---------- bank import ---------- */
+function loadScript(src){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=src;s.onload=res;s.onerror=rej;document.head.appendChild(s)})}
+async function readBankFile(file){const name=(file.name||'').toLowerCase();
+ if(/\.xlsx?$/.test(name)||/sheet|excel/.test(file.type||'')){if(!window.XLSX)await loadScript('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js');
+  const wb=window.XLSX.read(await file.arrayBuffer(),{type:'array',cellDates:false,raw:false});return window.XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]],{FS:';',blankrows:false})}
+ const buf=await file.arrayBuffer();try{return new TextDecoder('utf-8',{fatal:true}).decode(buf)}catch(e){return new TextDecoder('windows-1252').decode(buf)}}
+async function aiMapping(text){const prompt=`These are the first lines of a bank statement export (line number: content). Work out how to read it.
+${window.SpareBank.sample(text)}
+Return ONLY JSON: {"delimiter":";" or "," or "\\t" or "|","headerRow":line number of the column headers or -1,"columns":{"date":index,"amount":index or null,"debit":index or null,"credit":index or null,"sign":index of a debit/credit indicator column or null,"desc":[indexes of the counterparty name and description columns, most useful first]}}
+Column indexes start at 0. Use "amount" for a single signed amount column, otherwise "debit"/"credit". Never use a balance column.`;
+ return api('/api/tips',{method:'POST',body:{prompt}})}
+async function bankFile(file){ui.bankBusy=true;ui.bankErr='';render();
+ try{const text=await readBankFile(file);let r=window.SpareBank.parse(text);
+  if(!r.ok||!r.rows.length){const m=await aiMapping(text).catch(()=>null);if(m&&m.columns)r=window.SpareBank.parseWithMapping(text,m)}
+  if(!r.ok||!r.rows.length)throw new Error(T('Couldn\'t find dates and amounts in this file. Try another export format (CSV or CAMT.053) from your bank.'));
+  const out=r.rows.filter(x=>x.amount<0),income=r.rows.length-out.length;
+  const seen=new Set(S.entries.map(e=>e.bank).filter(Boolean));
+  const billWords=S.bills.flatMap(b=>norm(b.name).split(/[^a-z0-9]+/).filter(w=>w.length>=4));
+  for(const x of out){x.h=hash(x.date+'|'+x.amount+'|'+norm(x.desc));
+   const d=norm(x.desc+' '+x.label);
+   x.why=seen.has(x.h)?'seen':S.entries.some(e=>e.kind!=='bank'&&Math.abs(e.total+x.amount)<0.02&&Math.abs(dayDiff(e.date,x.date))<=2)?'scanned':billWords.some(w=>d.includes(w))?'bill':x.transfer?'transfer':x.cash?'cash':'';
+   x.inc=!x.why||x.why==='cash';if(x.why==='cash')x.label=x.label||T('Cash withdrawal')}
+  ui.bank={format:r.format,rows:out,income}}
+ catch(e){ui.bankErr=e.status===429?e.message:e.offline?T('You\'re offline.'):(e.message||T('Couldn\'t read that file.'))}
+ ui.bankBusy=false;render()}
+function importBank(){const sel=ui.bank.rows.filter(r=>r.inc);let total=0;
+ for(const r of sel){const amt=r2(-r.amount);total+=amt;S.entries.push({id:uid(),date:r.date,store:r.label,kind:'bank',bank:r.h,items:[{name:r.label,price:amt,cat:r.cat,pref:CATPREF[r.cat]||'want'}],total:amt})}
+ S.flash={at:Date.now(),kind:'bank',n:sel.length,total:r2(total)};afterSpend();ui.bank=null;persist();location.hash='overview';render()}
+
+/* ---------- savings ideas ---------- */
 async function getTips(){ui.tipsBusy=true;ui.tipsErr='';render();
- const since=new Date(Date.now()-60*864e5).toISOString().slice(0,10),agg={};
- for(const e of S.entries.filter(e=>e.date>=since))for(const i of e.items){const k=norm(i.name);agg[k]=agg[k]||{n:i.name,c:0,t:0,cat:i.cat,p:i.pref};agg[k].c++;agg[k].t+=i.price}
- const lines=Object.values(agg).sort((a,b)=>b.t-a.t).slice(0,50).map(a=>`- ${a.n} — ${a.c}× — €${a.t.toFixed(2)} — ${a.cat} — ${a.p}`).join('\n')||'(no receipts logged yet)';
- const prompt=`You are a practical, frugal budgeting coach for one person who lives alone with a cat in Belgium.
+ const since=iso(new Date(Date.now()-60*864e5)),agg={};
+ for(const e of S.entries.filter(e=>e.date>=since))for(const i of e.items){const k=norm(i.name);agg[k]=agg[k]||{n:i.name,c:0,t:0,cat:i.cat,p:i.pref,s:new Set()};agg[k].c++;agg[k].t+=i.price;if(e.store)agg[k].s.add(storeOf(e.store).name)}
+ const lines=Object.values(agg).sort((a,b)=>b.t-a.t).slice(0,50).map(a=>`- ${a.n} — ${a.c}× — €${a.t.toFixed(2)} — ${a.cat} — ${a.p} — ${[...a.s].join('/')}`).join('\n')||'(no receipts logged yet)';
+ const prompt=`You are a practical, frugal budgeting coach for someone living in Belgium.
 Net income €${S.settings.income}/month. Savings goal €${targetFor(mkey())}/month (rises each month it is hit). Next shopping-trip cap €${tripCap()}.
-Bills: ${S.bills.map(b=>`${b.name} €${b.amount} ${FREQ[b.freq].toLowerCase()}`).join('; ')}.
-Purchases in the last 60 days (name — times — total — category — need/want):
+Bills: ${S.bills.map(b=>`${b.name} €${b.amount} ${({m:'monthly',q:'quarterly',y:'yearly'})[b.freq]}`).join('; ')||'none listed'}.
+Purchases in the last 60 days (name — times — total — category — need/want — stores):
 ${lines}
-Give 5 concrete savings suggestions grounded in this data: e.g. swap a brand for a Belgian discount own brand (Colruyt Boni, Aldi, Lidl), buy cat food in bulk, cut or reduce a recurring "want", downgrade or pause a subscription if a cheaper plan exists. Do not invent purchases that are not listed. Estimate the monthly saving in euros conservatively.
+Give 5 concrete savings suggestions grounded in this data: e.g. buy a product at the cheaper store where it was already bought, swap a brand for a discount own brand (Colruyt Boni, Aldi, Lidl), buy in bulk, cut or reduce a recurring "want", downgrade or pause a subscription if a cheaper plan exists. Do not invent purchases that are not listed. Estimate the monthly saving in euros conservatively.
+Write "title" and "detail" in ${LANGPROMPT[LANG]}.
 Return ONLY JSON: [{"title":"short","detail":"one or two sentences","monthly":number}]`;
  try{const j=await api('/api/tips',{method:'POST',body:{prompt}});const items=(Array.isArray(j)?j:j&&j.items||[]).slice(0,6).map(t=>({title:String(t.title||''),detail:String(t.detail||''),monthly:r2(num(t.monthly))}));
   S.tips={at:Date.now(),items};persist()}
- catch(e){ui.tipsErr=e.status===429?e.message:e.offline?'You\'re offline.':'Couldn\'t get ideas right now.'}
+ catch(e){ui.tipsErr=e.status===429?e.message:e.offline?T('You\'re offline.'):T('Couldn\'t get ideas right now.')}
  ui.tipsBusy=false;render()}
 
-$.addEventListener('click',ev=>{const t=ev.target.closest('[data-act]');if(!t||t.tagName==='INPUT')return;const a=t.dataset.act,id=t.dataset.id,i=+t.dataset.i;
+/* ---------- events ---------- */
+if($){
+$.addEventListener('click',ev=>{const t=ev.target.closest('[data-act]');if(!t||t.tagName==='INPUT'||t.tagName==='SELECT')return;const a=t.dataset.act,id=t.dataset.id,i=+t.dataset.i;
  if(a==='dismiss'){S.notice=null;persist();render()}
  else if(a==='tips')getTips();
  else if(a==='paste'){const v=(document.getElementById('paste').value||'').trim();if(v)parse({text:v},'online')}
- else if(a==='manual'){ui.draft={store:'',date:today(),kind:t.dataset.kind,items:[{name:'',price:'',cat:t.dataset.kind==='online'?'other':'groceries',pref:t.dataset.kind==='online'?'want':'need'}],total:''};render()}
+ else if(a==='manual'){ui.draft={store:'',date:today(),kind:t.dataset.kind,items:[{name:'',price:'',qty:1,cat:t.dataset.kind==='online'?'other':'groceries',pref:t.dataset.kind==='online'?'want':'need'}],total:''};render()}
  else if(a==='pref'){const it=ui.draft.items[i];it.pref=it.pref==='need'?'want':'need';render()}
  else if(a==='rmitem'){ui.draft.items.splice(i,1);render()}
- else if(a==='additem'){ui.draft.items.push({name:'',price:'',cat:'groceries',pref:'need'});render()}
+ else if(a==='additem'){ui.draft.items.push({name:'',price:'',qty:1,cat:'groceries',pref:'need'});render()}
  else if(a==='save')saveDraft();
  else if(a==='discard'){ui.draft=null;render()}
+ else if(a==='bkall'||a==='bknone'){ui.bank.rows.forEach(r=>r.inc=a==='bkall');render()}
+ else if(a==='bkmonth'){const mk=mkey();ui.bank.rows.forEach(r=>r.inc=mkey(r.date)===mk&&(!r.why||r.why==='cash'));render()}
+ else if(a==='bkgo')importBank();
+ else if(a==='bkcancel'){ui.bank=null;render()}
  else if(a==='lpref'){const it=S.list.find(x=>x.id===id);it.pref=it.pref==='need'?'want':'need';S.prefs[norm(it.name)]=it.pref;persist();render()}
  else if(a==='lrm'){S.list=S.list.filter(x=>x.id!==id);persist();render()}
  else if(a==='lclear'){S.list=[];persist();render()}
@@ -225,25 +377,34 @@ $.addEventListener('click',ev=>{const t=ev.target.closest('[data-act]');if(!t||t
  else if(a==='delno'){ui.del=null;render()}
  else if(a==='delyes'){S.entries=S.entries.filter(e=>e.id!==id);S.deleted=[...(S.deleted||[]),id];ui.del=null;ui.open=null;persist();render()}
  else if(a==='brm'){S.bills=S.bills.filter(b=>b.id!==id);persist();render()}
- else if(a==='badd'){S.bills.push({id:uid(),name:'New bill',amount:0,freq:'m'});persist();render()}
+ else if(a==='badd'){S.bills.push({id:uid(),name:T('New bill'),amount:0,freq:'m'});persist();render()}
+ else if(a==='notifon'){notifAllowed(true).then(()=>{scheduleNotifs();render()})}
  else if(a==='export'){const p=navigator.clipboard&&navigator.clipboard.writeText(JSON.stringify(S));if(p)p.then(()=>{ui.copied=true;render();setTimeout(()=>{ui.copied=false;render()},2000)}).catch(()=>{})}
  else if(a==='imp'){ui.imp=!ui.imp;render()}
- else if(a==='impgo'){try{const s=JSON.parse(document.getElementById('impt').value);if(!s||!s.settings||!Array.isArray(s.entries))throw 0;S=migrate(s);ui.imp=false;persist();render()}catch(e){const x=document.getElementById('impt');x.style.borderColor='var(--bad)'}}
+ else if(a==='impgo'){try{const s=JSON.parse(document.getElementById('impt').value);if(!s||!s.settings||!Array.isArray(s.entries))throw 0;
+  if(typeof s.notice==='string')s.notice=null;S=migrate(s);ui.imp=false;persist();render()}catch(e){const x=document.getElementById('impt');if(x)x.style.borderColor='var(--bad)'}}
 });
 $.addEventListener('change',ev=>{const t=ev.target;
  if(t.dataset.act==='file'&&t.files&&t.files[0]){shrink(t.files[0]).then(toDataURL).then(img=>parse({image:img},'shop'));return}
+ if(t.dataset.act==='bankfile'&&t.files&&t.files[0]){bankFile(t.files[0]);return}
+ if(t.dataset.act==='lang'){setLang(t.value);return}
+ if(t.dataset.act==='bk'){ui.bank.rows[+t.dataset.i].inc=t.checked;render();return}
+ if(t.dataset.bkcat!==undefined){ui.bank.rows[+t.dataset.bkcat].cat=t.value;return}
+ if(t.dataset.notif){S.settings.notif={...S.settings.notif,[t.dataset.notif]:t.checked};if(t.checked)notifAllowed(true);persist();render();return}
  if(t.dataset.act==='done'){const it=S.list.find(x=>x.id===t.dataset.id);it.done=t.checked;persist();return}
- if(t.dataset.f&&ui.draft){if(t.dataset.i!==undefined){const it=ui.draft.items[+t.dataset.i];if(t.dataset.f==='cat'){it.cat=t.value;if(!S.prefs[norm(it.name)])it.pref=CATPREF[t.value]}else if(t.dataset.f==='name'){it.name=t.value;if(S.prefs[norm(t.value)])it.pref=S.prefs[norm(t.value)]}else it[t.dataset.f]=t.value}else ui.draft[t.dataset.f]=t.value;render();return}
+ if(t.dataset.f&&ui.draft){if(t.dataset.i!==undefined){const it=ui.draft.items[+t.dataset.i];if(t.dataset.f==='cat'){it.cat=t.value;if(!S.prefs[norm(it.name)])it.pref=CATPREF[t.value]}else if(t.dataset.f==='name'){it.name=t.value;it.gen='';if(S.prefs[norm(t.value)])it.pref=S.prefs[norm(t.value)]}else it[t.dataset.f]=t.value}else ui.draft[t.dataset.f]=t.value;render();return}
  if(t.dataset.lprice){const it=S.list.find(x=>x.id===t.dataset.lprice);it.price=r2(num(t.value));persist();render();return}
  if(t.dataset.set){const k=t.dataset.set;S.settings[k]=Math.max(0,num(t.value));if(k==='target'){S.months[mkey()]={target:S.settings.target}}if(k==='trips')S.settings.trips=Math.max(1,Math.round(S.settings.trips));if(k==='foodShare')S.settings.foodShare=Math.min(100,S.settings.foodShare);persist();render();return}
- if(t.dataset.bill){const b=S.bills.find(x=>x.id===t.dataset.id);b[t.dataset.bill]=t.dataset.bill==='amount'?r2(num(t.value)):t.value;persist();render()}
+ if(t.dataset.bill){const b=S.bills.find(x=>x.id===t.dataset.id);const k=t.dataset.bill;b[k]=k==='amount'?r2(num(t.value)):t.value;persist();render()}
 });
-$.addEventListener('input',ev=>{const t=ev.target;if(t.id==='lname'){const k=lastPrices()[norm(t.value)];const p=document.getElementById('lprice');if(k&&p&&!p.value)p.value=k.price}});
-$.addEventListener('submit',ev=>{ev.preventDefault();if(ev.target.dataset.form!=='add')return;const n=document.getElementById('lname').value.trim();if(!n)return;
- const lp=lastPrices()[norm(n)],pv=document.getElementById('lprice').value;const cat=lp?lp.cat:'groceries';
- S.list.push({id:uid(),name:n,price:pv?r2(num(pv)):(lp?lp.price:0),pref:prefOf(n,cat),done:false});persist();render();const x=document.getElementById('lname');if(x)x.focus()});
+$.addEventListener('input',ev=>{const t=ev.target;
+ if(t.id==='lname'){const p=findProd(priceIndex(),t.value);const pe=document.getElementById('lprice');if(p&&pe&&!pe.value)pe.value=p.best.price}
+ if(t.id==='pq'){ui.q=t.value;const q=norm(t.value);document.querySelectorAll('[data-pk]').forEach(el=>{el.style.display=!q||el.dataset.pk.includes(q)?'':'none'})}});
+$.addEventListener('submit',ev=>{if(ev.target.dataset.form!=='add')return;ev.preventDefault();const n=document.getElementById('lname').value.trim();if(!n)return;
+ const p=findProd(priceIndex(),n),pv=document.getElementById('lprice').value;const cat=p?(S.entries.flatMap(e=>e.items).find(i=>prodKey(i)===p.key)||{}).cat||'groceries':'groceries';
+ S.list.push({id:uid(),name:n,price:pv?r2(num(pv)):(p?p.best.price:0),pref:prefOf(n,cat),done:false});persist();render();const x=document.getElementById('lname');if(x)x.focus()});
 window.addEventListener('hashchange',()=>{ui.open=null;ui.del=null;render()});
-
+}
 
 /* ---------- account & sync ---------- */
 const AK='spare-auth-v1';
@@ -259,7 +420,7 @@ async function api(path,{method='GET',body}={}){let r;
  let j=null;try{j=await r.json()}catch(e){}
  if(r.status===401&&AUTH.token&&!path.startsWith('/api/login')){AUTH.token=null;saveAuth();render()}
  if(!r.ok&&r.status!==409){const x=new Error((j&&j.error)||('HTTP '+r.status));x.status=r.status;throw x}
- return Object.assign(j||{},{_status:r.status})}
+ return Array.isArray(j)?j:Object.assign(j||{},{_status:r.status})}
 
 function mergeStates(a,b){ // a = local, b = server; newest wins for settings, tickets are combined
  const newer=(a.updatedAt||0)>=(b.updatedAt||0)?a:b,older=newer===a?b:a;
@@ -273,7 +434,8 @@ async function pull(){if(!AUTH.token)return;try{const r=await api('/api/state');
   if(r.data){const local=S,hadLocal=S.entries.length||S.updatedAt>AUTH.serverAt;
    S=hadLocal&&AUTH.serverAt!==r.updatedAt?mergeStates(local,migrate(r.data)):migrate(r.data);AUTH.serverAt=r.updatedAt;saveAuth();rollover();localSave();
    sync='synced';render();if(hadLocal&&S.updatedAt>r.updatedAt)schedulePush(0)}
-  else{sync='synced';render();schedulePush(0)}}
+  else{sync='synced';render();schedulePush(0)}
+  scheduleNotifs()}
  catch(e){sync=e.offline?'offline':sync;if(ui.pulling){ui.pulling=false;render()}status()}}
 
 function schedulePush(delay=900){if(!AUTH.token)return;clearTimeout(pubT);sync='saving';status();pubT=setTimeout(push,delay)}
@@ -282,28 +444,30 @@ async function push(tries=0){try{const r=await api('/api/state',{method:'PUT',bo
   if(r.updatedAt){AUTH.serverAt=r.updatedAt;saveAuth();sync='synced'}status()}
  catch(e){sync=e.offline?'offline':'error';status();clearTimeout(pubT);pubT=setTimeout(push,30000)}}
 
-window.addEventListener('online',()=>AUTH.token&&schedulePush(0));
+if(typeof window.addEventListener==='function')window.addEventListener('online',()=>AUTH.token&&schedulePush(0));
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&AUTH.token&&sync!=='saving')pull()});
 
 function toDataURL(blob){return new Promise((res,rej)=>{const fr=new FileReader();fr.onload=()=>res(fr.result);fr.onerror=rej;fr.readAsDataURL(blob)})}
 
+function langPicker(){return `<select data-act="lang" style="width:auto;padding:6px 8px;font-size:13px;float:right">${Object.keys(LOCALES).map(l=>`<option value="${l}" ${l===LANG?'selected':''}>${LANGNAME[l]}</option>`).join('')}</select>`}
 function renderAuth(){const m=authUi.mode,f=authUi.f||{};
- const title={login:'Log in',signup:'Create account',forgot:'Reset password',forgot2:'Reset password'}[m];
+ const title={login:T('Log in'),signup:T('Create account'),forgot:T('Reset password'),forgot2:T('Reset password')}[m];
  let fields='';
- if(m==='login'||m==='signup')fields=`<label class="f">Email</label><input id="aemail" type="email" autocomplete="email" required value="${esc(f.email||'')}">
- <label class="f">Password${m==='signup'?' (8+ characters)':''}</label><input id="apw" type="password" autocomplete="${m==='signup'?'new-password':'current-password'}" required minlength="${m==='signup'?8:1}">
- ${m==='signup'?`<label class="f">Invite code</label><input id="ainv" autocapitalize="characters" autocomplete="off" placeholder="From the person who invited you" value="${esc(f.invite||'')}">`:''}`;
- else if(m==='forgot')fields=`<div class="small mute">Enter your email. If email is set up on this server you'll get a code; otherwise ask the person who invited you for a reset code.</div><label class="f">Email</label><input id="aemail" type="email" autocomplete="email" required value="${esc(f.email||'')}">`;
- else fields=`${authUi.info?`<div class="note good small">${esc(authUi.info)}</div>`:''}<label class="f">Email</label><input id="aemail" type="email" required value="${esc(f.email||'')}"><label class="f">Reset code</label><input id="acode" autocapitalize="characters" autocomplete="one-time-code" required><label class="f">New password (8+ characters)</label><input id="apw" type="password" autocomplete="new-password" required minlength="8">`;
- $.innerHTML=`<div class="auth"><img src="icon-192.png" alt="" width="84" height="84" style="border-radius:20px;display:block;margin-bottom:12px"><h1>Spare</h1><div class="mute">Scan tickets, squeeze a little more out of every trip.</div>
- <div class="tabs"><button class="${m==='login'?'':'ghost'}" data-auth="login">Log in</button><button class="${m==='signup'?'':'ghost'}" data-auth="signup">Create account</button></div>
+ if(m==='login'||m==='signup')fields=`<label class="f">${T('Email')}</label><input id="aemail" type="email" autocomplete="email" required value="${esc(f.email||'')}">
+ <label class="f">${T('Password')}${m==='signup'?' '+T('(8+ characters)'):''}</label><input id="apw" type="password" autocomplete="${m==='signup'?'new-password':'current-password'}" required minlength="${m==='signup'?8:1}">
+ ${m==='signup'?`<label class="f">${T('Invite code')}</label><input id="ainv" autocapitalize="characters" autocomplete="off" placeholder="${T('From the person who invited you')}" value="${esc(f.invite||'')}">`:''}`;
+ else if(m==='forgot')fields=`<div class="small mute">${T('Enter your email. If email is set up on this server you\'ll get a code; otherwise ask the person who invited you for a reset code.')}</div><label class="f">${T('Email')}</label><input id="aemail" type="email" autocomplete="email" required value="${esc(f.email||'')}">`;
+ else fields=`${authUi.info?`<div class="note good small">${esc(authUi.info)}</div>`:''}<label class="f">${T('Email')}</label><input id="aemail" type="email" required value="${esc(f.email||'')}"><label class="f">${T('Reset code')}</label><input id="acode" autocapitalize="characters" autocomplete="one-time-code" required><label class="f">${T('New password')} ${T('(8+ characters)')}</label><input id="apw" type="password" autocomplete="new-password" required minlength="8">`;
+ $.innerHTML=`<div class="auth">${langPicker()}${logo()}<h1>Spare</h1><div class="mute">${T('Scan tickets, squeeze a little more out of every trip.')}</div>
+ <div class="tabs"><button class="${m==='login'?'':'ghost'}" data-auth="login">${T('Log in')}</button><button class="${m==='signup'?'':'ghost'}" data-auth="signup">${T('Create account')}</button></div>
  <form data-form="auth" class="card">${m.startsWith('forgot')?`<h2>${title}</h2>`:''}${fields}
- <details ${AUTH.api?'':'open'} style="margin-top:10px"><summary class="small mute">Server</summary><input id="aapi" placeholder="https://spare.yourname.workers.dev" value="${esc(AUTH.api)}"><div class="tiny mute">Leave empty on the website itself. The Android app needs the server's address.</div></details>
+ <details ${AUTH.api?'':'open'} style="margin-top:10px"><summary class="small mute">${T('Server')}</summary><input id="aapi" placeholder="https://spare.yourname.workers.dev" value="${esc(AUTH.api)}"><div class="tiny mute">${T('Leave empty on the website itself. The Android app needs the server\'s address.')}</div></details>
  ${authUi.err?`<div class="err">${esc(authUi.err)}</div>`:''}
- <div class="btns"><button ${authUi.busy?'disabled':''}>${authUi.busy?'<span class="spin"></span>':''}${m==='forgot'?'Get a code':m==='forgot2'?'Set new password':title}</button>
- ${m==='login'?'<button type="button" class="link" data-auth="forgot">Forgot password?</button>':''}${m.startsWith('forgot')?'<button type="button" class="link" data-auth="forgot2">I have a code</button>':''}</div></form>
- <div class="tiny mute">New accounts need an invite code. Your tickets and settings are private to your account.</div></div>`}
+ <div class="btns"><button ${authUi.busy?'disabled':''}>${authUi.busy?'<span class="spin"></span>':''}${m==='forgot'?T('Get a code'):m==='forgot2'?T('Set new password'):title}</button>
+ ${m==='login'?`<button type="button" class="link" data-auth="forgot">${T('Forgot password?')}</button>`:''}${m.startsWith('forgot')?`<button type="button" class="link" data-auth="forgot2">${T('I have a code')}</button>`:''}</div></form>
+ <div class="tiny mute">${T('New accounts need an invite code. Your tickets and settings are private to your account.')}</div></div>`}
 
+if($){
 $.addEventListener('click',ev=>{const t=ev.target.closest('[data-auth]');if(!t)return;const e=document.getElementById('aemail');authUi.f={...(authUi.f||{}),email:e?e.value:(authUi.f||{}).email};authUi.mode=t.dataset.auth;authUi.err='';authUi.info='';renderAuth()});
 $.addEventListener('submit',async ev=>{if(ev.target.dataset.form!=='auth')return;ev.preventDefault();
  const g=id=>{const x=document.getElementById(id);return x?x.value:''};const m=authUi.mode;
@@ -312,59 +476,58 @@ $.addEventListener('submit',async ev=>{if(ev.target.dataset.form!=='auth')return
  authUi.busy=true;authUi.err='';renderAuth();
  try{
   if(m==='forgot'){const r=await api('/api/reset/request',{method:'POST',body:{email}});authUi.busy=false;authUi.mode='forgot2';
-   authUi.info=r.emailed?'If that account exists, a code is on its way to your inbox (check spam). It works for 1 hour.':'Email isn\'t set up on this server. Ask the person who invited you for a reset code.';renderAuth();return}
+   authUi.info=r.emailed?T('If that account exists, a code is on its way to your inbox (check spam). It works for 1 hour.'):T('Email isn\'t set up on this server. Ask the person who invited you for a reset code.');renderAuth();return}
   const path=m==='login'?'/api/login':m==='signup'?'/api/signup':'/api/reset/confirm';
   const body=m==='forgot2'?{email,code:g('acode'),newPassword:password}:{email,password,invite:g('ainv')};
   const r=await api(path,{method:'POST',body});
   AUTH.token=r.token;AUTH.email=r.email;AUTH.serverAt=-1;saveAuth();authUi.busy=false;authUi.f={};ui.pulling=true;render();await pull();if(ui.pulling){ui.pulling=false;render()}}
- catch(e){authUi.busy=false;authUi.err=e.offline?'Can\'t reach the server. Check the address and your connection.':e.message;renderAuth()}});
+ catch(e){authUi.busy=false;authUi.err=e.offline?T('Can\'t reach the server. Check the address and your connection.'):e.message;renderAuth()}});
+}
 
 /* ---------- first-run setup ---------- */
-const QUICK=[['Rent',0,'m'],['Electricity',0,'m'],['Gas / heating',0,'m'],['Water',0,'q'],['Internet',0,'m'],['Phone',0,'m'],['Health insurance / mutuality',0,'m'],['Home insurance',0,'y'],['Transport',0,'m'],['Streaming / music',0,'m']];
+const QUICK=[['Rent','m'],['Electricity','m'],['Gas / heating','m'],['Water','q'],['Internet','m'],['Phone','m'],['Health insurance / mutuality','m'],['Home insurance','y'],['Transport','m'],['Streaming / music','m']];
 function renderSetup(){const s=S.settings,cm=commit(),liv=r2(s.income-cm-s.target);
  const f=(k,l,h)=>`<div><label class="f">${l}</label><input class="num" inputmode="decimal" data-set="${k}" value="${s[k]||''}" placeholder="0">${h?`<div class="tiny mute">${h}</div>`:''}</div>`;
  const have=new Set(S.bills.map(b=>norm(b.name)));
- const chips=QUICK.filter(q=>!have.has(norm(q[0]))).map(q=>`<button class="ghost" style="padding:6px 10px;font-size:13px" data-act="bquick" data-name="${esc(q[0])}" data-freq="${q[2]}">+ ${esc(q[0])}</button>`).join('');
- const bills=S.bills.map(b=>`<div class="bill"><input data-bill="name" data-id="${b.id}" value="${esc(b.name)}"><input class="num" inputmode="decimal" data-bill="amount" data-id="${b.id}" value="${b.amount||''}" placeholder="€"><select data-bill="freq" data-id="${b.id}">${Object.entries(FREQ).map(([k,v])=>`<option value="${k}" ${b.freq===k?'selected':''}>${v}</option>`).join('')}</select><button class="link" data-act="brm" data-id="${b.id}">×</button></div>`).join('');
- $.innerHTML=`<div class="top"><h1>Welcome</h1><span class="status" id="sync"></span></div>
- <div class="card"><h2>Your month</h2><div class="small mute">Spare works out how much you can spend after bills and savings, then makes each shopping trip a little tighter.</div>
- <div class="grid2">${f('income','Monthly income after tax (€)')}${f('target','Savings goal per month (€)','It rises a little each month you hit it.')}</div></div>
- <div class="card"><h2>Bills</h2><div class="small mute" style="margin-bottom:8px">Everything that leaves your account on its own. Pick a frequency for bills that aren't monthly.</div>${bills}
- <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">${chips}<button class="ghost" style="padding:6px 10px;font-size:13px" data-act="badd">+ Other</button></div></div>
- <div class="card"><div class="row"><span>Income</span><span class="num">${fmt(s.income)}</span></div><div class="row"><span>Bills (monthly average)</span><span class="num">−${fmt(cm)}</span></div><div class="row"><span>Savings goal</span><span class="num">−${fmt(s.target)}</span></div><div class="row"><b>Left to live on</b><b class="num" style="color:${liv<0?'var(--bad)':'inherit'}">${fmt(liv)}</b></div>
- ${ui.setupErr?`<div class="err">${esc(ui.setupErr)}</div>`:''}<div class="btns"><button class="acc" data-act="setupdone">Start saving</button><button class="link" data-act="logout">Log out</button></div>
- <div class="tiny mute" style="margin-top:6px">You can change all of this later in Settings.</div></div>
- <div class="card"><div class="small mute">Already using the claude.ai version? There, Settings → Copy backup, then paste it here.</div>${ui.imp?`<textarea id="impt" placeholder="Paste backup here"></textarea><div class="btns"><button data-act="impgo">Restore this backup</button></div>`:'<div class="btns"><button class="ghost" data-act="imp">Paste a backup</button></div>'}</div>`;status()}
+ const chips=QUICK.filter(q=>!have.has(norm(T(q[0])))).map(q=>`<button class="ghost" style="padding:6px 10px;font-size:13px" data-act="bquick" data-name="${esc(T(q[0]))}" data-freq="${q[1]}">+ ${esc(T(q[0]))}</button>`).join('');
+ $.innerHTML=`<div class="top"><h1>${T('Welcome')}</h1>${langPicker()}</div>
+ <div class="card"><h2>${T('Your month')}</h2><div class="small mute">${T('Spare works out how much you can spend after bills and savings, then makes each shopping trip a little tighter.')}</div>
+ <div class="grid2">${f('income',T('Monthly income after tax (€)'))}${f('target',T('Savings goal per month (€)'),T('It rises a little each month you hit it.'))}</div></div>
+ <div class="card"><h2>${T('Bills')}</h2><div class="small mute" style="margin-bottom:8px">${T('Everything that leaves your account on its own. Pick a frequency for bills that aren\'t monthly.')}</div>${billRows(true)}
+ <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">${chips}<button class="ghost" style="padding:6px 10px;font-size:13px" data-act="badd">+ ${T('Other')}</button></div></div>
+ <div class="card"><div class="row"><span>${T('Income')}</span><span class="num">${fmt(s.income)}</span></div><div class="row"><span>${T('Bills (monthly average)')}</span><span class="num">−${fmt(cm)}</span></div><div class="row"><span>${T('Savings goal')}</span><span class="num">−${fmt(s.target)}</span></div><div class="row"><b>${T('Left to live on')}</b><b class="num" style="color:${liv<0?'var(--bad)':'inherit'}">${fmt(liv)}</b></div>
+ ${ui.setupErr?`<div class="err">${esc(ui.setupErr)}</div>`:''}<div class="btns"><button class="acc" data-act="setupdone">${T('Start saving')}</button><button class="link" data-act="logout">${T('Log out')}</button></div>
+ <div class="tiny mute" style="margin-top:6px">${T('You can change all of this later in Settings.')}</div></div>
+ <div class="card"><div class="small mute">${T('Already using the claude.ai version? There, Settings → Copy backup, then paste it here.')}</div>${ui.imp?`<textarea id="impt" placeholder="${T('Paste backup here')}"></textarea><div class="btns"><button data-act="impgo">${T('Restore this backup')}</button></div>`:`<div class="btns"><button class="ghost" data-act="imp">${T('Paste a backup')}</button></div>`}</div>`;status()}
 
 /* ---------- admin ---------- */
 async function loadAdmin(){try{ui.admin={...(ui.admin||{}),...(await api('/api/admin/overview')),loading:false}}catch(e){ui.admin={...(ui.admin||{}),err:e.message,loading:false}}render()}
-function adminCard(){const a=ui.admin;if(!a){ui.admin={loading:true};loadAdmin();return '<div class="card"><h2>Invites &amp; people</h2><span class="spin"></span></div>'}
- const d=t=>t?new Date(t).toLocaleDateString('en-GB',{day:'numeric',month:'short'}):'never';
- const inv=(a.invites||[]).map(i=>`<div class="row small"><span><b class="num">${esc(i.code)}</b> ${esc(i.note)} <span class="mute">${i.uses}/${i.max_uses} used</span></span><span><button class="link" data-act="invcopy" data-code="${esc(i.code)}">${a.copied===i.code?'Copied ✓':'Copy'}</button><button class="link" data-act="invdel" data-code="${esc(i.code)}">×</button></span></div>`).join('');
- const users=(a.users||[]).map((u,k)=>`<div class="row small"><span>${esc(u.email)} ${k===0?'<span class="tag ok">admin</span>':''}<br><span class="tiny mute">joined ${d(u.created_at)} · last sync ${d(u.synced)}</span></span>${k===0?'':`<span>${a.reset&&a.reset.email===u.email?`<b class="num">${esc(a.reset.code)}</b>`:`<button class="link" data-act="ureset" data-email="${esc(u.email)}">Reset code</button>`}</span>`}</div>`).join('');
- return `<div class="card"><h2>Invites &amp; people</h2><div class="small mute">You're the admin. New accounts need one of these codes.</div>
- <div style="display:grid;grid-template-columns:1fr 70px auto;gap:8px;margin-top:10px"><input id="invnote" placeholder="Who is it for? (optional)"><input id="invuses" class="num" inputmode="numeric" value="1" title="How many accounts can use it"><button data-act="invnew">New code</button></div>
- <div style="margin-top:8px">${inv||'<div class="tiny mute">No codes yet.</div>'}</div>
- <h3 style="margin-top:14px">People (${(a.users||[]).length})</h3>${users}
- ${a.reset?`<div class="note good small">Give this code to ${esc(a.reset.email)}: on the login screen they tap "Forgot password?" → "I have a code". It works for 24 hours.</div>`:''}${a.err?`<div class="err">${esc(a.err)}</div>`:''}</div>`}
+function adminCard(){const a=ui.admin;if(!a){ui.admin={loading:true};loadAdmin();return `<div class="card"><h2>${T('Invites & people')}</h2><span class="spin"></span></div>`}
+ const d=t=>t?new Date(t).toLocaleDateString(LOCALES[LANG],{day:'numeric',month:'short'}):T('never');
+ const inv=(a.invites||[]).map(i=>`<div class="row small"><span><b class="num">${esc(i.code)}</b> ${esc(i.note)} <span class="mute">${T('{0}/{1} used',i.uses,i.max_uses)}</span></span><span><button class="link" data-act="invcopy" data-code="${esc(i.code)}">${a.copied===i.code?T('Copied ✓'):T('Copy')}</button><button class="link" data-act="invdel" data-code="${esc(i.code)}">×</button></span></div>`).join('');
+ const users=(a.users||[]).map((u,k)=>`<div class="row small"><span>${esc(u.email)} ${k===0?`<span class="tag ok">${T('admin')}</span>`:''}<br><span class="tiny mute">${T('joined {0} · last sync {1}',d(u.created_at),d(u.synced))}</span></span>${k===0?'':`<span>${a.reset&&a.reset.email===u.email?`<b class="num">${esc(a.reset.code)}</b>`:`<button class="link" data-act="ureset" data-email="${esc(u.email)}">${T('Reset code')}</button>`}</span>`}</div>`).join('');
+ return `<div class="card"><h2>${T('Invites & people')}</h2><div class="small mute">${T('You\'re the admin. New accounts need one of these codes.')}</div>
+ <div style="display:grid;grid-template-columns:1fr 70px auto;gap:8px;margin-top:10px"><input id="invnote" placeholder="${T('Who is it for? (optional)')}"><input id="invuses" class="num" inputmode="numeric" value="1" title="${T('How many accounts can use it')}"><button data-act="invnew">${T('New code')}</button></div>
+ <div style="margin-top:8px">${inv||`<div class="tiny mute">${T('No codes yet.')}</div>`}</div>
+ <h3 style="margin-top:14px">${T('People ({0})',(a.users||[]).length)}</h3>${users}
+ ${a.reset?`<div class="note good small">${T('Give this code to {0}: on the login screen they tap "Forgot password?" then "I have a code". It works for 24 hours.',esc(a.reset.email))}</div>`:''}${a.err?`<div class="err">${esc(a.err)}</div>`:''}</div>`}
 
-$.addEventListener('click',async ev=>{const t=ev.target.closest('[data-act]');if(!t)return;const a=t.dataset.act;
+function accountCard(){const p=authUi.pw;return `<div class="card"><h2>${T('Account')}</h2><div class="row"><span class="mute">${T('Signed in as')}</span><span>${esc(AUTH.email||'')}</span></div>
+ ${p?`<label class="f">${T('Current password')}</label><input id="pwold" type="password"><label class="f">${T('New password')}</label><input id="pwnew" type="password" minlength="8">${p.err?`<div class="err">${esc(p.err)}</div>`:''}${p.ok?`<div class="note good small">${T('Password changed.')}</div>`:''}<div class="btns"><button data-act="pwgo">${T('Change password')}</button><button class="link" data-act="pwcancel">${T('Cancel')}</button></div>`
+ :`<div class="btns"><button class="ghost" data-act="sync">${T('Sync now')}</button><button class="ghost" data-act="pwopen">${T('Change password')}</button><button class="ghost" data-act="logout">${T('Log out')}</button></div>`}</div>`}
+
+if($)$.addEventListener('click',async ev=>{const t=ev.target.closest('[data-act]');if(!t||t.tagName==='SELECT'||t.tagName==='INPUT')return;const a=t.dataset.act;
  if(a==='bquick'){S.bills.push({id:uid(),name:t.dataset.name,amount:0,freq:t.dataset.freq});persist();render()}
- else if(a==='setupdone'){if(!(S.settings.income>0)){ui.setupErr='Enter your monthly income first.';return render()}ui.setupErr='';S.bills=S.bills.filter(b=>b.amount>0);S.setupDone=true;S.months[mkey()]={target:S.settings.target};persist();location.hash='overview';render()}
- else if(a==='invnew'){try{const r=await api('/api/admin/invite',{method:'POST',body:{note:document.getElementById('invnote').value,uses:+document.getElementById('invuses').value||1}});ui.admin.copied=null;await loadAdmin()}catch(e){ui.admin.err=e.message;render()}}
+ else if(a==='setupdone'){if(!(S.settings.income>0)){ui.setupErr=T('Enter your monthly income first.');return render()}ui.setupErr='';S.bills=S.bills.filter(b=>b.amount>0);S.setupDone=true;S.months[mkey()]={target:S.settings.target};persist();location.hash='overview';render()}
+ else if(a==='invnew'){try{await api('/api/admin/invite',{method:'POST',body:{note:document.getElementById('invnote').value,uses:+document.getElementById('invuses').value||1}});ui.admin.copied=null;await loadAdmin()}catch(e){ui.admin.err=e.message;render()}}
  else if(a==='invdel'){await api('/api/admin/invite/delete',{method:'POST',body:{code:t.dataset.code}}).catch(()=>{});loadAdmin()}
  else if(a==='invcopy'){const c=t.dataset.code;try{await navigator.clipboard.writeText(c)}catch(e){}ui.admin.copied=c;render()}
  else if(a==='ureset'){try{const r=await api('/api/admin/reset',{method:'POST',body:{email:t.dataset.email}});ui.admin.reset={email:t.dataset.email,code:r.code};render()}catch(e){ui.admin.err=e.message;render()}}
-});
-
-function accountCard(){const p=authUi.pw;return `<div class="card"><h2>Account</h2><div class="row"><span class="mute">Signed in as</span><span>${esc(AUTH.email||'')}</span></div>
- ${p?`<label class="f">Current password</label><input id="pwold" type="password"><label class="f">New password</label><input id="pwnew" type="password" minlength="8">${p.err?`<div class="err">${esc(p.err)}</div>`:''}${p.ok?'<div class="note good small">Password changed.</div>':''}<div class="btns"><button data-act="pwgo">Change password</button><button class="link" data-act="pwcancel">Cancel</button></div>`
- :`<div class="btns"><button class="ghost" data-act="sync">Sync now</button><button class="ghost" data-act="pwopen">Change password</button><button class="ghost" data-act="logout">Log out</button></div>`}</div>`}
-$.addEventListener('click',async ev=>{const t=ev.target.closest('[data-act]');if(!t)return;const a=t.dataset.act;
- if(a==='sync')pull();
+ else if(a==='sync')pull();
  else if(a==='pwopen'){authUi.pw={};render()}
  else if(a==='pwcancel'){authUi.pw=null;render()}
- else if(a==='pwgo'){try{await api('/api/password',{method:'POST',body:{oldPassword:document.getElementById('pwold').value,newPassword:document.getElementById('pwnew').value}});authUi.pw={ok:true};render();setTimeout(()=>{authUi.pw=null;render()},2500)}catch(e){authUi.pw={err:e.offline?'You\'re offline.':e.message};render()}}
- else if(a==='logout'){try{await api('/api/logout',{method:'POST'})}catch(e){}AUTH.token=null;AUTH.serverAt=0;AUTH.admin=false;ui.admin=null;saveAuth();try{localStorage.removeItem(LSK)}catch(e){}S=defaults();rollover();render()}});
+ else if(a==='pwgo'){try{await api('/api/password',{method:'POST',body:{oldPassword:document.getElementById('pwold').value,newPassword:document.getElementById('pwnew').value}});authUi.pw={ok:true};render();setTimeout(()=>{authUi.pw=null;render()},2500)}catch(e){authUi.pw={err:e.offline?T('You\'re offline.'):e.message};render()}}
+ else if(a==='logout'){try{await api('/api/logout',{method:'POST'})}catch(e){}const ln=LN();if(ln)try{const p=await ln.getPending();if(p.notifications.length)await ln.cancel({notifications:p.notifications.map(n=>({id:n.id}))})}catch(e){}
+  AUTH.token=null;AUTH.serverAt=0;AUTH.admin=false;ui.admin=null;saveAuth();try{localStorage.removeItem(LSK)}catch(e){}S=defaults();rollover();render()}});
 
-load();rollover();render();if(AUTH.token)pull();
+load();rollover();render();if(AUTH.token){pull();notifAllowed(false).then(()=>{if(view()==='settings')render()})}

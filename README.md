@@ -7,6 +7,10 @@ Scan your shopping tickets, track every euro, and squeeze a little more savings 
 - **Shrinking trip cap**: each shopping trip you finish under the cap makes the next cap €0.50 smaller. Going over relaxes it by one step and tells you which "want" to leave on the shelf next time.
 - **Shopping list**: needs are counted first, then wants. Anything that doesn't fit is struck out with the exact amount you're short.
 - **Rising savings goal**: hit the monthly goal and next month's goal goes up by €10.
+- **Price comparison**: every scanned product is remembered per store. Spare shows where each one is cheapest, the best store for your shopping list, and how much you overpaid this month.
+- **Bank statement import**: CSV, Excel, CAMT.053 (XML) and OFX from KBC, Belfius, ING, BNP Paribas Fortis, Argenta, Crelan, Revolut, N26, Wise and most European banks. Bills, transfers to your own accounts and payments you already scanned are skipped automatically. If a format isn't recognised, AI reads the file's header to find the columns.
+- **Notifications** (Android app): reminders 3 days before quarterly/yearly bills, a Sunday summary, a last-day-of-month recap, and alerts at 80% / 100% of the monthly budget.
+- **English, French and Dutch** (Settings → Language, or the picker on the login screen).
 - **Accounts + sync**: the same data on PC (website) and phone (Android app), stored in your own Cloudflare D1 database.
 
 ```
