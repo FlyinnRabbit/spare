@@ -20,3 +20,28 @@ CREATE TABLE IF NOT EXISTS states (
   data        TEXT NOT NULL,
   updated_at  INTEGER NOT NULL
 );
+
+-- Invite codes (the first account is the admin and creates them).
+CREATE TABLE IF NOT EXISTS invites (
+  code        TEXT PRIMARY KEY,
+  note        TEXT NOT NULL DEFAULT '',
+  max_uses    INTEGER NOT NULL DEFAULT 1,
+  uses        INTEGER NOT NULL DEFAULT 0,
+  created_at  INTEGER NOT NULL
+);
+
+-- One-time password reset codes.
+CREATE TABLE IF NOT EXISTS resets (
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  code_hash   TEXT NOT NULL,
+  expires_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS resets_user ON resets(user_id);
+
+-- Daily AI usage per person (ticket scans + savings ideas).
+CREATE TABLE IF NOT EXISTS usage (
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  day         TEXT NOT NULL,
+  n           INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, day)
+);

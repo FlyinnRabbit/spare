@@ -56,6 +56,28 @@ async function authUser(env, req) {
   return { id: row.id, email: row.email, tokenHash: th };
 }
 
+const randCode = (n = 8) => {
+  const A = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no 0/O/1/I
+  return [...crypto.getRandomValues(new Uint8Array(n))].map((b) => A[b % A.length]).join("");
+};
+const isAdmin = async (env, userId) =>
+  (await env.DB.prepare("SELECT MIN(id) AS id FROM users").first())?.id === userId;
+async function makeResetCode(env, userId, ttlMs) {
+  const code = randCode(8);
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM resets WHERE user_id = ? OR expires_at < ?").bind(userId, Date.now()),
+    env.DB.prepare("INSERT INTO resets (user_id, code_hash, expires_at) VALUES (?, ?, ?)").bind(userId, await sha256(code), Date.now() + ttlMs),
+  ]);
+  return code;
+}
+async function useAI(env, user) {
+  if (user.admin) return;
+  const limit = +(env.DAILY_AI_LIMIT || 25), day = new Date().toISOString().slice(0, 10);
+  const row = await env.DB.prepare("SELECT n FROM usage WHERE user_id = ? AND day = ?").bind(user.id, day).first();
+  if (row && row.n >= limit) throw Object.assign(new Error(`Daily limit reached (${limit} scans or ideas). It resets overnight.`), { status: 429 });
+  await env.DB.prepare("INSERT INTO usage (user_id, day, n) VALUES (?, ?, 1) ON CONFLICT(user_id, day) DO UPDATE SET n = n + 1").bind(user.id, day).run();
+}
+
 // ---------- AI ----------
 function extractJSON(out) {
   if (out && typeof out === "object") return out;
@@ -100,19 +122,58 @@ const validEmail = (e) => typeof e === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.
 async function api(req, env, path) {
   const method = req.method;
 
-  if (path === "/api/health") return json({ ok: true, ai: env.ANTHROPIC_API_KEY ? "claude" : "workers-ai", signup: env.ALLOW_SIGNUP !== "false" });
+  if (path === "/api/health") return json({ ok: true, ai: env.ANTHROPIC_API_KEY ? "claude" : "workers-ai", signup: env.ALLOW_SIGNUP !== "false", email: !!(env.RESEND_API_KEY && env.MAIL_FROM) });
+
+  if (path === "/api/reset/request" && method === "POST") {
+    const { email } = await readBody(req, 10_000);
+    const em = String(email || "").trim().toLowerCase();
+    const canMail = !!(env.RESEND_API_KEY && env.MAIL_FROM);
+    const u = validEmail(em) && await env.DB.prepare("SELECT id FROM users WHERE email = ?").bind(em).first();
+    if (u && canMail) {
+      const code = await makeResetCode(env, u.id, 3600e3);
+      await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ from: env.MAIL_FROM, to: em, subject: "Your Spare reset code",
+          text: `Your Spare password reset code is ${code}\n\nIt works for 1 hour. If you didn't ask for it, ignore this email.` }),
+      });
+    }
+    return json({ ok: true, emailed: canMail });
+  }
+
+  if (path === "/api/reset/confirm" && method === "POST") {
+    const { email, code, newPassword } = await readBody(req, 10_000);
+    const em = String(email || "").trim().toLowerCase();
+    if (typeof newPassword !== "string" || newPassword.length < 8) return fail(400, "New password needs at least 8 characters.");
+    const u = await env.DB.prepare("SELECT id FROM users WHERE email = ?").bind(em).first();
+    const r = u && await env.DB.prepare("SELECT code_hash FROM resets WHERE user_id = ? AND expires_at > ?").bind(u.id, Date.now()).first();
+    if (!r || r.code_hash !== await sha256(String(code || "").trim().toUpperCase())) return fail(400, "That code is wrong or expired.");
+    await env.DB.batch([
+      env.DB.prepare("UPDATE users SET pw_hash = ? WHERE id = ?").bind(await hashPassword(newPassword), u.id),
+      env.DB.prepare("DELETE FROM resets WHERE user_id = ?").bind(u.id),
+      env.DB.prepare("DELETE FROM sessions WHERE user_id = ?").bind(u.id),
+    ]);
+    return json({ token: await newSession(env, u.id), email: em });
+  }
 
   if (path === "/api/signup" && method === "POST") {
     if (env.ALLOW_SIGNUP === "false") return fail(403, "Sign-ups are closed on this server.");
-    const { email, password } = await readBody(req, 10_000);
+    const { email, password, invite } = await readBody(req, 10_000);
     const em = String(email || "").trim().toLowerCase();
     if (!validEmail(em)) return fail(400, "Enter a valid email.");
+    const first = !(await env.DB.prepare("SELECT id FROM users LIMIT 1").first());
+    const code = String(invite || "").trim().toUpperCase();
+    if (!first) {
+      const inv = code && await env.DB.prepare("SELECT code, max_uses, uses FROM invites WHERE code = ?").bind(code).first();
+      if (!inv || inv.uses >= inv.max_uses) return fail(403, code ? "That invite code is wrong or already used." : "You need an invite code to create an account.");
+    }
     if (typeof password !== "string" || password.length < 8) return fail(400, "Password needs at least 8 characters.");
     const exists = await env.DB.prepare("SELECT id FROM users WHERE email = ?").bind(em).first();
     if (exists) return fail(409, "An account with this email already exists. Log in instead.");
     const r = await env.DB.prepare("INSERT INTO users (email, pw_hash, created_at) VALUES (?, ?, ?)")
       .bind(em, await hashPassword(password), Date.now()).run();
     const id = r.meta.last_row_id;
+    if (!first) await env.DB.prepare("UPDATE invites SET uses = uses + 1 WHERE code = ?").bind(code).run();
     return json({ token: await newSession(env, id), email: em });
   }
 
@@ -127,6 +188,37 @@ async function api(req, env, path) {
 
   const user = await authUser(env, req);
   if (!user) return fail(401, "Please log in again.");
+  user.admin = await isAdmin(env, user.id);
+
+  if (path.startsWith("/api/admin/")) {
+    if (!user.admin) return fail(403, "Only the admin can do that.");
+    if (path === "/api/admin/overview" && method === "GET") {
+      const invites = (await env.DB.prepare("SELECT code, note, max_uses, uses, created_at FROM invites ORDER BY created_at DESC").all()).results;
+      const users = (await env.DB.prepare(
+        "SELECT u.email, u.created_at, s.updated_at AS synced FROM users u LEFT JOIN states s ON s.user_id = u.id ORDER BY u.id"
+      ).all()).results;
+      return json({ invites, users });
+    }
+    if (path === "/api/admin/invite" && method === "POST") {
+      const { note, uses } = await readBody(req, 10_000);
+      const code = randCode(8);
+      await env.DB.prepare("INSERT INTO invites (code, note, max_uses, uses, created_at) VALUES (?, ?, ?, 0, ?)")
+        .bind(code, String(note || "").slice(0, 80), Math.min(50, Math.max(1, +uses || 1)), Date.now()).run();
+      return json({ code });
+    }
+    if (path === "/api/admin/invite/delete" && method === "POST") {
+      const { code } = await readBody(req, 10_000);
+      await env.DB.prepare("DELETE FROM invites WHERE code = ?").bind(String(code || "")).run();
+      return json({ ok: true });
+    }
+    if (path === "/api/admin/reset" && method === "POST") {
+      const { email } = await readBody(req, 10_000);
+      const u = await env.DB.prepare("SELECT id FROM users WHERE email = ?").bind(String(email || "").toLowerCase()).first();
+      if (!u) return fail(404, "No such account.");
+      return json({ code: await makeResetCode(env, u.id, 24 * 3600e3) });
+    }
+    return fail(404, "Not found");
+  }
 
   if (path === "/api/logout" && method === "POST") {
     await env.DB.prepare("DELETE FROM sessions WHERE token_hash = ?").bind(user.tokenHash).run();
@@ -147,7 +239,7 @@ async function api(req, env, path) {
 
   if (path === "/api/state" && method === "GET") {
     const row = await env.DB.prepare("SELECT data, updated_at FROM states WHERE user_id = ?").bind(user.id).first();
-    return json({ email: user.email, data: row ? JSON.parse(row.data) : null, updatedAt: row ? row.updated_at : 0 });
+    return json({ email: user.email, admin: user.admin, data: row ? JSON.parse(row.data) : null, updatedAt: row ? row.updated_at : 0 });
   }
 
   if (path === "/api/state" && method === "PUT") {
@@ -169,6 +261,7 @@ async function api(req, env, path) {
     const { image, text, prompt } = await readBody(req);
     if (typeof prompt !== "string" || prompt.length > 8000) return fail(400, "Missing prompt.");
     if (image && !/^data:image\/(jpeg|png|webp);base64,/.test(image)) return fail(400, "Unsupported image.");
+    await useAI(env, user);
     const full = text ? `${prompt}\n\nOrder text:\n${String(text).slice(0, 20000)}` : prompt;
     try { return json(extractJSON(await askModel(env, full, image || null))); }
     catch (e) { return fail(502, "Couldn't read that ticket. " + e.message); }
@@ -177,6 +270,7 @@ async function api(req, env, path) {
   if (path === "/api/tips" && method === "POST") {
     const { prompt } = await readBody(req, 60_000);
     if (typeof prompt !== "string" || prompt.length > 30000) return fail(400, "Missing prompt.");
+    await useAI(env, user);
     try { return json(extractJSON(await askModel(env, prompt, null))); }
     catch (e) { return fail(502, "Couldn't get ideas right now. " + e.message); }
   }

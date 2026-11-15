@@ -15,11 +15,10 @@ const mkey=ds=>String(ds||today()).slice(0,7);
 const mname=(mk,short)=>new Date(mk+'-01T12:00:00').toLocaleDateString('en-GB',short?{month:'short'}:{month:'long',year:'numeric'});
 function daysLeft(){const d=new Date();return new Date(d.getFullYear(),d.getMonth()+1,0).getDate()-d.getDate()+1}
 
-function defaults(){return{v:1,updatedAt:0,
- settings:{income:1300,target:500,monthlyStep:10,tripStep:0.5,trips:8,foodShare:75,minCap:15},
- bills:[['Tidal',22,'m'],['Mutuality',14.5,'m'],['FGTB',12,'m'],['Claude Pro',20,'m'],['Web access (Hong Kong)',7,'m'],['Electricity (max)',65,'m'],['Internet + phone',50,'m'],['Water bill (estimate, edit me)',60,'q'],['Discord',100,'y'],['Cloudflare',12,'y']].map(([name,amount,freq])=>({id:uid(),name,amount,freq})),
- entries:[],deleted:[],prefs:{},list:[],cur:{month:null,level:0},months:{},tips:null,notice:null,flash:null}}
-function migrate(s){const d=defaults();for(const k in d)if(s[k]===undefined)s[k]=d[k];for(const k in d.settings)if(s.settings[k]===undefined)s.settings[k]=d.settings[k];return s}
+function defaults(){return{v:1,updatedAt:0,setupDone:false,
+ settings:{income:0,target:0,monthlyStep:10,tripStep:0.5,trips:8,foodShare:75,minCap:15},
+ bills:[],entries:[],deleted:[],prefs:{},list:[],cur:{month:null,level:0},months:{},tips:null,notice:null,flash:null}}
+function migrate(s){const d=defaults();if(s.setupDone===undefined)s.setupDone=(s.updatedAt||0)>0||(s.entries||[]).length>0||(s.bills||[]).length>0;for(const k in d)if(s[k]===undefined)s[k]=d[k];for(const k in d.settings)if(s.settings[k]===undefined)s.settings[k]=d.settings[k];return s}
 
 let S,sync='idle',pubT=null;const SAMPLE=true,canImg=true;
 let ui={draft:null,busy:false,err:'',open:null,del:null,tipsBusy:false,tipsErr:'',copied:false,imp:false};
@@ -65,7 +64,7 @@ function lastPrices(){const m={};for(const e of [...S.entries].sort((a,b)=>a.dat
 const $=document.getElementById('root');
 const view=()=>{const h=location.hash.slice(1);return['overview','scan','list','history','settings'].includes(h)?h:'overview'};
 function status(){const el=document.getElementById('sync');if(el)el.innerHTML=({saving:'<span class="spin"></span>Syncing…',synced:'✓ Synced',offline:'Offline — will sync',error:'Sync problem — retrying',idle:''})[sync]||''}
-function render(){if(!AUTH.token)return renderAuth();const v=view();
+function render(){if(!AUTH.token)return renderAuth();if(ui.pulling){$.innerHTML='<div class="auth"><h1>Spare</h1><div class="note warn"><span class="spin"></span>Loading your data…</div></div>';return}if(!S.setupDone)return renderSetup();const v=view();
  const nav=[['overview','◔','Overview'],['scan','⊡','Scan'],['list','☰','List'],['history','↺','History'],['settings','⚙','Settings']].map(([k,i,t])=>`<a href="#${k}" class="${v===k?'on':''}"><b>${i}</b>${t}</a>`).join('');
  $.innerHTML=`<div class="top"><h1>Spare</h1><span class="status" id="sync"></span></div>${({overview:vOverview,scan:vScan,list:vList,history:vHistory,settings:vSettings})[v]()}<nav>${nav}</nav>`;status()}
 
@@ -155,7 +154,7 @@ function vHistory(){const by={};for(const e of S.entries){(by[mkey(e.date)]=by[m
 
 function vSettings(){const s=S.settings,f=(k,l,h)=>`<div><label class="f">${l}</label><input class="num" inputmode="decimal" data-set="${k}" value="${s[k]}">${h?`<div class="tiny mute">${h}</div>`:''}</div>`;
  const bills=S.bills.map(b=>`<div class="bill"><input data-bill="name" data-id="${b.id}" value="${esc(b.name)}"><input class="num" inputmode="decimal" data-bill="amount" data-id="${b.id}" value="${b.amount}"><select data-bill="freq" data-id="${b.id}">${Object.entries(FREQ).map(([k,v])=>`<option value="${k}" ${b.freq===k?'selected':''}>${v}</option>`).join('')}</select><button class="link" data-act="brm" data-id="${b.id}">×</button></div>`).join('');
- return accountCard()+`<div class="card"><h2>Money</h2><div class="grid2">${f('income','Monthly income (€)')}${f('target','Savings goal this month (€)')}${f('monthlyStep','Goal rises by (€) after a good month')}${f('tripStep','Trip cap shrinks by (€) per win')}${f('trips','Shopping trips per month')}${f('foodShare','% of living money for trips')}${f('minCap','Never squeeze a trip below (€)')}</div><div class="tiny mute" style="margin-top:8px">Changes save as you leave each field.</div></div>
+ return accountCard()+(AUTH.admin?adminCard():'')+`<div class="card"><h2>Money</h2><div class="grid2">${f('income','Monthly income (€)')}${f('target','Savings goal this month (€)')}${f('monthlyStep','Goal rises by (€) after a good month')}${f('tripStep','Trip cap shrinks by (€) per win')}${f('trips','Shopping trips per month')}${f('foodShare','% of living money for trips')}${f('minCap','Never squeeze a trip below (€)')}</div><div class="tiny mute" style="margin-top:8px">Changes save as you leave each field.</div></div>
  <div class="card"><h2>Bills</h2>${bills}<button class="link" data-act="badd">+ Add bill</button><div class="row" style="margin-top:8px"><span>Monthly equivalent</span><b class="num">${fmt(commit())}</b></div></div>
  <div class="card"><h2>Backup</h2><div class="small mute">Copy your data to keep it somewhere safe, or paste a backup to restore it.</div><div class="btns"><button class="ghost" data-act="export">${ui.copied?'Copied ✓':'Copy backup'}</button><button class="ghost" data-act="imp">Restore…</button></div>
  ${ui.imp?`<textarea id="impt" placeholder="Paste backup here"></textarea><div class="btns"><button data-act="impgo">Restore this backup</button></div>`:''}</div>`}
@@ -176,7 +175,7 @@ function toDraft(j,kind){const items=(Array.isArray(j&&j.items)?j.items:[]).map(
  return{store:String((j&&j.store)||''),date:d,kind:(j&&j.kind==='online')||kind==='online'?'online':'shop',items:items.length?items:[{name:'',price:'',cat:'groceries',pref:'need'}],total:j&&j.total!=null?r2(num(j.total)):''}}
 async function parse(body,kind){ui.busy=true;ui.err='';render();
  try{const j=await api('/api/scan',{method:'POST',body:{prompt:PARSE,...body}});ui.draft=toDraft(j,kind)}
- catch(e){ui.err=e.offline?'You\'re offline — enter the ticket by hand, or scan it when you\'re back online.':'Couldn\'t read that ticket. Try a sharper, flatter photo, or enter it by hand.'}
+ catch(e){ui.err=e.status===429?e.message:e.offline?'You\'re offline — enter the ticket by hand, or scan it when you\'re back online.':'Couldn\'t read that ticket. Try a sharper, flatter photo, or enter it by hand.'}
  ui.busy=false;render()}
 
 function saveDraft(){const d=ui.draft;const items=d.items.filter(i=>i.name.trim()||num(i.price)).map(i=>({name:i.name.trim()||'Item',price:r2(num(i.price)),cat:i.cat,pref:i.pref}));
@@ -205,7 +204,7 @@ Give 5 concrete savings suggestions grounded in this data: e.g. swap a brand for
 Return ONLY JSON: [{"title":"short","detail":"one or two sentences","monthly":number}]`;
  try{const j=await api('/api/tips',{method:'POST',body:{prompt}});const items=(Array.isArray(j)?j:j&&j.items||[]).slice(0,6).map(t=>({title:String(t.title||''),detail:String(t.detail||''),monthly:r2(num(t.monthly))}));
   S.tips={at:Date.now(),items};persist()}
- catch(e){ui.tipsErr=e.offline?'You\'re offline.':'Couldn\'t get ideas right now.'}
+ catch(e){ui.tipsErr=e.status===429?e.message:e.offline?'You\'re offline.':'Couldn\'t get ideas right now.'}
  ui.tipsBusy=false;render()}
 
 $.addEventListener('click',ev=>{const t=ev.target.closest('[data-act]');if(!t||t.tagName==='INPUT')return;const a=t.dataset.act,id=t.dataset.id,i=+t.dataset.i;
@@ -270,12 +269,12 @@ function mergeStates(a,b){ // a = local, b = server; newest wins for settings, t
  m.entries=[...ents.values()];m.deleted=[...del].slice(-500);m.prefs={...older.prefs,...newer.prefs};
  m.months={...older.months,...newer.months};m.updatedAt=Math.max(a.updatedAt||0,b.updatedAt||0);return m}
 
-async function pull(){if(!AUTH.token)return;try{const r=await api('/api/state');
+async function pull(){if(!AUTH.token)return;try{const r=await api('/api/state');AUTH.admin=!!r.admin;if(ui.pulling){ui.pulling=false}
   if(r.data){const local=S,hadLocal=S.entries.length||S.updatedAt>AUTH.serverAt;
    S=hadLocal&&AUTH.serverAt!==r.updatedAt?mergeStates(local,migrate(r.data)):migrate(r.data);AUTH.serverAt=r.updatedAt;saveAuth();rollover();localSave();
    sync='synced';render();if(hadLocal&&S.updatedAt>r.updatedAt)schedulePush(0)}
-  else{sync='synced';schedulePush(0)}}
- catch(e){sync=e.offline?'offline':sync;status()}}
+  else{sync='synced';render();schedulePush(0)}}
+ catch(e){sync=e.offline?'offline':sync;if(ui.pulling){ui.pulling=false;render()}status()}}
 
 function schedulePush(delay=900){if(!AUTH.token)return;clearTimeout(pubT);sync='saving';status();pubT=setTimeout(push,delay)}
 async function push(tries=0){try{const r=await api('/api/state',{method:'PUT',body:{data:S,base:AUTH.serverAt}});
@@ -288,24 +287,75 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
 
 function toDataURL(blob){return new Promise((res,rej)=>{const fr=new FileReader();fr.onload=()=>res(fr.result);fr.onerror=rej;fr.readAsDataURL(blob)})}
 
-function renderAuth(){const m=authUi.mode;
+function renderAuth(){const m=authUi.mode,f=authUi.f||{};
+ const title={login:'Log in',signup:'Create account',forgot:'Reset password',forgot2:'Reset password'}[m];
+ let fields='';
+ if(m==='login'||m==='signup')fields=`<label class="f">Email</label><input id="aemail" type="email" autocomplete="email" required value="${esc(f.email||'')}">
+ <label class="f">Password${m==='signup'?' (8+ characters)':''}</label><input id="apw" type="password" autocomplete="${m==='signup'?'new-password':'current-password'}" required minlength="${m==='signup'?8:1}">
+ ${m==='signup'?`<label class="f">Invite code</label><input id="ainv" autocapitalize="characters" autocomplete="off" placeholder="From the person who invited you" value="${esc(f.invite||'')}">`:''}`;
+ else if(m==='forgot')fields=`<div class="small mute">Enter your email. If email is set up on this server you'll get a code; otherwise ask the person who invited you for a reset code.</div><label class="f">Email</label><input id="aemail" type="email" autocomplete="email" required value="${esc(f.email||'')}">`;
+ else fields=`${authUi.info?`<div class="note good small">${esc(authUi.info)}</div>`:''}<label class="f">Email</label><input id="aemail" type="email" required value="${esc(f.email||'')}"><label class="f">Reset code</label><input id="acode" autocapitalize="characters" autocomplete="one-time-code" required><label class="f">New password (8+ characters)</label><input id="apw" type="password" autocomplete="new-password" required minlength="8">`;
  $.innerHTML=`<div class="auth"><h1>Spare</h1><div class="mute">Scan tickets, squeeze a little more out of every trip.</div>
  <div class="tabs"><button class="${m==='login'?'':'ghost'}" data-auth="login">Log in</button><button class="${m==='signup'?'':'ghost'}" data-auth="signup">Create account</button></div>
- <form data-form="auth" class="card"><label class="f">Email</label><input id="aemail" type="email" autocomplete="email" required>
- <label class="f">Password${m==='signup'?' (8+ characters)':''}</label><input id="apw" type="password" autocomplete="${m==='signup'?'new-password':'current-password'}" required minlength="${m==='signup'?8:1}">
- <details ${AUTH.api?'':'open'} style="margin-top:10px"><summary class="small mute">Server</summary><input id="aapi" placeholder="https://spare.yourname.workers.dev" value="${esc(AUTH.api)}"><div class="tiny mute">Leave empty on the website itself. The Android app needs your Worker's address.</div></details>
+ <form data-form="auth" class="card">${m.startsWith('forgot')?`<h2>${title}</h2>`:''}${fields}
+ <details ${AUTH.api?'':'open'} style="margin-top:10px"><summary class="small mute">Server</summary><input id="aapi" placeholder="https://spare.yourname.workers.dev" value="${esc(AUTH.api)}"><div class="tiny mute">Leave empty on the website itself. The Android app needs the server's address.</div></details>
  ${authUi.err?`<div class="err">${esc(authUi.err)}</div>`:''}
- <div class="btns"><button ${authUi.busy?'disabled':''}>${authUi.busy?'<span class="spin"></span>':''}${m==='login'?'Log in':'Create account'}</button></div></form>
- <div class="tiny mute">Your tickets, bills and settings sync to your own Cloudflare database. Anything already on this device is kept and merged in.</div></div>`}
+ <div class="btns"><button ${authUi.busy?'disabled':''}>${authUi.busy?'<span class="spin"></span>':''}${m==='forgot'?'Get a code':m==='forgot2'?'Set new password':title}</button>
+ ${m==='login'?'<button type="button" class="link" data-auth="forgot">Forgot password?</button>':''}${m.startsWith('forgot')?'<button type="button" class="link" data-auth="forgot2">I have a code</button>':''}</div></form>
+ <div class="tiny mute">New accounts need an invite code. Your tickets and settings are private to your account.</div></div>`}
 
-$.addEventListener('click',ev=>{const t=ev.target.closest('[data-auth]');if(t){authUi.mode=t.dataset.auth;authUi.err='';renderAuth()}});
+$.addEventListener('click',ev=>{const t=ev.target.closest('[data-auth]');if(!t)return;const e=document.getElementById('aemail');authUi.f={...(authUi.f||{}),email:e?e.value:(authUi.f||{}).email};authUi.mode=t.dataset.auth;authUi.err='';authUi.info='';renderAuth()});
 $.addEventListener('submit',async ev=>{if(ev.target.dataset.form!=='auth')return;ev.preventDefault();
- const email=document.getElementById('aemail').value,password=document.getElementById('apw').value;
- AUTH.api=(document.getElementById('aapi').value||'').trim().replace(/\/$/,'');
+ const g=id=>{const x=document.getElementById(id);return x?x.value:''};const m=authUi.mode;
+ const email=g('aemail').trim(),password=g('apw');authUi.f={email,invite:g('ainv')};
+ AUTH.api=g('aapi').trim().replace(/\/$/,'');saveAuth();
  authUi.busy=true;authUi.err='';renderAuth();
- try{const r=await api(authUi.mode==='login'?'/api/login':'/api/signup',{method:'POST',body:{email,password}});
-  AUTH.token=r.token;AUTH.email=r.email;AUTH.serverAt=-1;saveAuth();authUi.busy=false;render();await pull()}
+ try{
+  if(m==='forgot'){const r=await api('/api/reset/request',{method:'POST',body:{email}});authUi.busy=false;authUi.mode='forgot2';
+   authUi.info=r.emailed?'If that account exists, a code is on its way to your inbox (check spam). It works for 1 hour.':'Email isn\'t set up on this server. Ask the person who invited you for a reset code.';renderAuth();return}
+  const path=m==='login'?'/api/login':m==='signup'?'/api/signup':'/api/reset/confirm';
+  const body=m==='forgot2'?{email,code:g('acode'),newPassword:password}:{email,password,invite:g('ainv')};
+  const r=await api(path,{method:'POST',body});
+  AUTH.token=r.token;AUTH.email=r.email;AUTH.serverAt=-1;saveAuth();authUi.busy=false;authUi.f={};ui.pulling=true;render();await pull();if(ui.pulling){ui.pulling=false;render()}}
  catch(e){authUi.busy=false;authUi.err=e.offline?'Can\'t reach the server. Check the address and your connection.':e.message;renderAuth()}});
+
+/* ---------- first-run setup ---------- */
+const QUICK=[['Rent',0,'m'],['Electricity',0,'m'],['Gas / heating',0,'m'],['Water',0,'q'],['Internet',0,'m'],['Phone',0,'m'],['Health insurance / mutuality',0,'m'],['Home insurance',0,'y'],['Transport',0,'m'],['Streaming / music',0,'m']];
+function renderSetup(){const s=S.settings,cm=commit(),liv=r2(s.income-cm-s.target);
+ const f=(k,l,h)=>`<div><label class="f">${l}</label><input class="num" inputmode="decimal" data-set="${k}" value="${s[k]||''}" placeholder="0">${h?`<div class="tiny mute">${h}</div>`:''}</div>`;
+ const have=new Set(S.bills.map(b=>norm(b.name)));
+ const chips=QUICK.filter(q=>!have.has(norm(q[0]))).map(q=>`<button class="ghost" style="padding:6px 10px;font-size:13px" data-act="bquick" data-name="${esc(q[0])}" data-freq="${q[2]}">+ ${esc(q[0])}</button>`).join('');
+ const bills=S.bills.map(b=>`<div class="bill"><input data-bill="name" data-id="${b.id}" value="${esc(b.name)}"><input class="num" inputmode="decimal" data-bill="amount" data-id="${b.id}" value="${b.amount||''}" placeholder="€"><select data-bill="freq" data-id="${b.id}">${Object.entries(FREQ).map(([k,v])=>`<option value="${k}" ${b.freq===k?'selected':''}>${v}</option>`).join('')}</select><button class="link" data-act="brm" data-id="${b.id}">×</button></div>`).join('');
+ $.innerHTML=`<div class="top"><h1>Welcome</h1><span class="status" id="sync"></span></div>
+ <div class="card"><h2>Your month</h2><div class="small mute">Spare works out how much you can spend after bills and savings, then makes each shopping trip a little tighter.</div>
+ <div class="grid2">${f('income','Monthly income after tax (€)')}${f('target','Savings goal per month (€)','It rises a little each month you hit it.')}</div></div>
+ <div class="card"><h2>Bills</h2><div class="small mute" style="margin-bottom:8px">Everything that leaves your account on its own. Pick a frequency for bills that aren't monthly.</div>${bills}
+ <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">${chips}<button class="ghost" style="padding:6px 10px;font-size:13px" data-act="badd">+ Other</button></div></div>
+ <div class="card"><div class="row"><span>Income</span><span class="num">${fmt(s.income)}</span></div><div class="row"><span>Bills (monthly average)</span><span class="num">−${fmt(cm)}</span></div><div class="row"><span>Savings goal</span><span class="num">−${fmt(s.target)}</span></div><div class="row"><b>Left to live on</b><b class="num" style="color:${liv<0?'var(--bad)':'inherit'}">${fmt(liv)}</b></div>
+ ${ui.setupErr?`<div class="err">${esc(ui.setupErr)}</div>`:''}<div class="btns"><button class="acc" data-act="setupdone">Start saving</button><button class="link" data-act="logout">Log out</button></div>
+ <div class="tiny mute" style="margin-top:6px">You can change all of this later in Settings.</div></div>
+ <div class="card"><div class="small mute">Already using the claude.ai version? There, Settings → Copy backup, then paste it here.</div>${ui.imp?`<textarea id="impt" placeholder="Paste backup here"></textarea><div class="btns"><button data-act="impgo">Restore this backup</button></div>`:'<div class="btns"><button class="ghost" data-act="imp">Paste a backup</button></div>'}</div>`;status()}
+
+/* ---------- admin ---------- */
+async function loadAdmin(){try{ui.admin={...(ui.admin||{}),...(await api('/api/admin/overview')),loading:false}}catch(e){ui.admin={...(ui.admin||{}),err:e.message,loading:false}}render()}
+function adminCard(){const a=ui.admin;if(!a){ui.admin={loading:true};loadAdmin();return '<div class="card"><h2>Invites &amp; people</h2><span class="spin"></span></div>'}
+ const d=t=>t?new Date(t).toLocaleDateString('en-GB',{day:'numeric',month:'short'}):'never';
+ const inv=(a.invites||[]).map(i=>`<div class="row small"><span><b class="num">${esc(i.code)}</b> ${esc(i.note)} <span class="mute">${i.uses}/${i.max_uses} used</span></span><span><button class="link" data-act="invcopy" data-code="${esc(i.code)}">${a.copied===i.code?'Copied ✓':'Copy'}</button><button class="link" data-act="invdel" data-code="${esc(i.code)}">×</button></span></div>`).join('');
+ const users=(a.users||[]).map((u,k)=>`<div class="row small"><span>${esc(u.email)} ${k===0?'<span class="tag ok">admin</span>':''}<br><span class="tiny mute">joined ${d(u.created_at)} · last sync ${d(u.synced)}</span></span>${k===0?'':`<span>${a.reset&&a.reset.email===u.email?`<b class="num">${esc(a.reset.code)}</b>`:`<button class="link" data-act="ureset" data-email="${esc(u.email)}">Reset code</button>`}</span>`}</div>`).join('');
+ return `<div class="card"><h2>Invites &amp; people</h2><div class="small mute">You're the admin. New accounts need one of these codes.</div>
+ <div style="display:grid;grid-template-columns:1fr 70px auto;gap:8px;margin-top:10px"><input id="invnote" placeholder="Who is it for? (optional)"><input id="invuses" class="num" inputmode="numeric" value="1" title="How many accounts can use it"><button data-act="invnew">New code</button></div>
+ <div style="margin-top:8px">${inv||'<div class="tiny mute">No codes yet.</div>'}</div>
+ <h3 style="margin-top:14px">People (${(a.users||[]).length})</h3>${users}
+ ${a.reset?`<div class="note good small">Give this code to ${esc(a.reset.email)}: on the login screen they tap "Forgot password?" → "I have a code". It works for 24 hours.</div>`:''}${a.err?`<div class="err">${esc(a.err)}</div>`:''}</div>`}
+
+$.addEventListener('click',async ev=>{const t=ev.target.closest('[data-act]');if(!t)return;const a=t.dataset.act;
+ if(a==='bquick'){S.bills.push({id:uid(),name:t.dataset.name,amount:0,freq:t.dataset.freq});persist();render()}
+ else if(a==='setupdone'){if(!(S.settings.income>0)){ui.setupErr='Enter your monthly income first.';return render()}ui.setupErr='';S.bills=S.bills.filter(b=>b.amount>0);S.setupDone=true;S.months[mkey()]={target:S.settings.target};persist();location.hash='overview';render()}
+ else if(a==='invnew'){try{const r=await api('/api/admin/invite',{method:'POST',body:{note:document.getElementById('invnote').value,uses:+document.getElementById('invuses').value||1}});ui.admin.copied=null;await loadAdmin()}catch(e){ui.admin.err=e.message;render()}}
+ else if(a==='invdel'){await api('/api/admin/invite/delete',{method:'POST',body:{code:t.dataset.code}}).catch(()=>{});loadAdmin()}
+ else if(a==='invcopy'){const c=t.dataset.code;try{await navigator.clipboard.writeText(c)}catch(e){}ui.admin.copied=c;render()}
+ else if(a==='ureset'){try{const r=await api('/api/admin/reset',{method:'POST',body:{email:t.dataset.email}});ui.admin.reset={email:t.dataset.email,code:r.code};render()}catch(e){ui.admin.err=e.message;render()}}
+});
 
 function accountCard(){const p=authUi.pw;return `<div class="card"><h2>Account</h2><div class="row"><span class="mute">Signed in as</span><span>${esc(AUTH.email||'')}</span></div>
  ${p?`<label class="f">Current password</label><input id="pwold" type="password"><label class="f">New password</label><input id="pwnew" type="password" minlength="8">${p.err?`<div class="err">${esc(p.err)}</div>`:''}${p.ok?'<div class="note good small">Password changed.</div>':''}<div class="btns"><button data-act="pwgo">Change password</button><button class="link" data-act="pwcancel">Cancel</button></div>`
@@ -315,6 +365,6 @@ $.addEventListener('click',async ev=>{const t=ev.target.closest('[data-act]');if
  else if(a==='pwopen'){authUi.pw={};render()}
  else if(a==='pwcancel'){authUi.pw=null;render()}
  else if(a==='pwgo'){try{await api('/api/password',{method:'POST',body:{oldPassword:document.getElementById('pwold').value,newPassword:document.getElementById('pwnew').value}});authUi.pw={ok:true};render();setTimeout(()=>{authUi.pw=null;render()},2500)}catch(e){authUi.pw={err:e.offline?'You\'re offline.':e.message};render()}}
- else if(a==='logout'){try{await api('/api/logout',{method:'POST'})}catch(e){}AUTH.token=null;AUTH.serverAt=0;saveAuth();try{localStorage.removeItem(LSK)}catch(e){}S=defaults();rollover();render()}});
+ else if(a==='logout'){try{await api('/api/logout',{method:'POST'})}catch(e){}AUTH.token=null;AUTH.serverAt=0;AUTH.admin=false;ui.admin=null;saveAuth();try{localStorage.removeItem(LSK)}catch(e){}S=defaults();rollover();render()}});
 
 load();rollover();render();if(AUTH.token)pull();

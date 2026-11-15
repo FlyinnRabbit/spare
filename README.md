@@ -32,11 +32,11 @@ In this repo: **Settings → Secrets and variables → Actions → New repositor
 
 | Secret | Value |
 |---|---|
-| `CLOUDFLARE_API_TOKEN` | the token from step 2 |
+| `CLOUDFLARE_API_TOKEN` | the token from step 2 (needs **D1 Edit**) |
 | `CLOUDFLARE_ACCOUNT_ID` | your account ID |
 | `D1_DATABASE_ID` | the database ID from step 1 |
 
-Then go to **Actions → Deploy to Cloudflare → Run workflow**. When it finishes, the log shows your address, e.g. `https://spare.<your-subdomain>.workers.dev`. That's the PC version: open it and **create your account**.
+Then go to **Actions → Deploy to Cloudflare → Run workflow**. When it finishes, the **Deploy Worker** step shows your address, e.g. `https://spare.<your-subdomain>.workers.dev`. That's the PC version: open it and **create your account**. The first account doesn't need an invite code and becomes the admin.
 
 ### 4. Android app
 1. Same settings page → **Variables** tab → **New repository variable**: `SPARE_API_URL` = your Worker address from step 3.
@@ -46,10 +46,18 @@ Then go to **Actions → Deploy to Cloudflare → Run workflow**. When it finish
 
 Every new build installs over the previous one (same signing key), and your data stays in the cloud.
 
-### 5. Close sign-ups (recommended)
-Once your account exists, set `ALLOW_SIGNUP = "false"` in `worker/wrangler.toml` and commit. The Worker redeploys by itself.
+### 5. Invite people
+The **first account created is the admin**. Everyone else needs an invite code:
+
+- **Settings → Invites & people → New code.** Choose how many accounts it can create, then send them the code and your server address.
+- New people start with a blank setup (their income, savings goal and bills) and only ever see their own data.
+- **Forgot password:** in Invites & people, tap **Reset code** next to the person and give them the code. They use "Forgot password? → I have a code" on the login screen. To send codes by email instead, see below.
+- Each person can scan or ask for ideas **25 times a day** (`DAILY_AI_LIMIT` in `worker/wrangler.toml`). The admin has no limit.
+- To stop all sign-ups, set `ALLOW_SIGNUP = "false"` in `worker/wrangler.toml`.
 
 ## Optional
+
+- **Reset codes by email**: create a free [Resend](https://resend.com) account, verify your domain (e.g. watchtvrabbit.dev), set `MAIL_FROM` in `worker/wrangler.toml`, and add the secret `RESEND_API_KEY` to the Worker (Cloudflare dashboard → Workers → spare → Settings → Variables and Secrets).
 
 - **Better ticket reading with Claude**: by default tickets are read by Cloudflare Workers AI (Llama 4 Scout, free daily allowance). To use Claude instead, add a secret named `ANTHROPIC_API_KEY` to the Worker (Cloudflare dashboard → Workers → spare → Settings → Variables and Secrets). It uses the Anthropic API, which is billed separately from a Claude Pro subscription.
 - **Own domain**: uncomment the `routes` line in `worker/wrangler.toml`, e.g. `spare.watchtvrabbit.dev`.

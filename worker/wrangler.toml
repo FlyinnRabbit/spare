@@ -17,8 +17,13 @@ database_id = "D1_DATABASE_ID_PLACEHOLDER"
 binding = "AI"
 
 [vars]
-# Set to "false" once you've created your account(s) to stop new sign-ups.
+# New accounts need an invite code from the admin (the first account created).
+# Set to "false" to stop all new sign-ups, even with a code.
 ALLOW_SIGNUP = "true"
+# Ticket scans + savings ideas per person per day (the admin has no limit).
+DAILY_AI_LIMIT = "25"
+# Optional, for "forgot password" emails via Resend (resend.com, free tier):
+# MAIL_FROM = "Spare <spare@watchtvrabbit.dev>"   and add the secret RESEND_API_KEY.
 
 # Optional: serve on your own domain instead of spare.<you>.workers.dev
 # routes = [{ pattern = "spare.watchtvrabbit.dev", custom_domain = true }]
