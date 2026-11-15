@@ -64,9 +64,9 @@ function lastPrices(){const m={};for(const e of [...S.entries].sort((a,b)=>a.dat
 const $=document.getElementById('root');
 const view=()=>{const h=location.hash.slice(1);return['overview','scan','list','history','settings'].includes(h)?h:'overview'};
 function status(){const el=document.getElementById('sync');if(el)el.innerHTML=({saving:'<span class="spin"></span>Syncing…',synced:'✓ Synced',offline:'Offline — will sync',error:'Sync problem — retrying',idle:''})[sync]||''}
-function render(){if(!AUTH.token)return renderAuth();if(ui.pulling){$.innerHTML='<div class="auth"><h1>Spare</h1><div class="note warn"><span class="spin"></span>Loading your data…</div></div>';return}if(!S.setupDone)return renderSetup();const v=view();
+function render(){if(!AUTH.token)return renderAuth();if(ui.pulling){$.innerHTML='<div class="auth"><img src="icon-192.png" alt="" width="84" height="84" style="border-radius:20px;display:block;margin-bottom:12px"><h1>Spare</h1><div class="note warn"><span class="spin"></span>Loading your data…</div></div>';return}if(!S.setupDone)return renderSetup();const v=view();
  const nav=[['overview','◔','Overview'],['scan','⊡','Scan'],['list','☰','List'],['history','↺','History'],['settings','⚙','Settings']].map(([k,i,t])=>`<a href="#${k}" class="${v===k?'on':''}"><b>${i}</b>${t}</a>`).join('');
- $.innerHTML=`<div class="top"><h1>Spare</h1><span class="status" id="sync"></span></div>${({overview:vOverview,scan:vScan,list:vList,history:vHistory,settings:vSettings})[v]()}<nav>${nav}</nav>`;status()}
+ $.innerHTML=`<div class="top"><h1 style="display:flex;align-items:center;gap:10px"><img src="favicon.png" alt="" width="34" height="34" style="border-radius:9px">Spare</h1><span class="status" id="sync"></span></div>${({overview:vOverview,scan:vScan,list:vList,history:vHistory,settings:vSettings})[v]()}<nav>${nav}</nav>`;status()}
 
 function flashHtml(){const f=S.flash;if(!f||Date.now()-f.at>10*60*1000)return'';
  if(f.kind==='online')return`<div class="note good">Saved ${fmt(f.total)} of online spending. ${fmt(f.left)} left for living this month.</div>`;
@@ -295,7 +295,7 @@ function renderAuth(){const m=authUi.mode,f=authUi.f||{};
  ${m==='signup'?`<label class="f">Invite code</label><input id="ainv" autocapitalize="characters" autocomplete="off" placeholder="From the person who invited you" value="${esc(f.invite||'')}">`:''}`;
  else if(m==='forgot')fields=`<div class="small mute">Enter your email. If email is set up on this server you'll get a code; otherwise ask the person who invited you for a reset code.</div><label class="f">Email</label><input id="aemail" type="email" autocomplete="email" required value="${esc(f.email||'')}">`;
  else fields=`${authUi.info?`<div class="note good small">${esc(authUi.info)}</div>`:''}<label class="f">Email</label><input id="aemail" type="email" required value="${esc(f.email||'')}"><label class="f">Reset code</label><input id="acode" autocapitalize="characters" autocomplete="one-time-code" required><label class="f">New password (8+ characters)</label><input id="apw" type="password" autocomplete="new-password" required minlength="8">`;
- $.innerHTML=`<div class="auth"><h1>Spare</h1><div class="mute">Scan tickets, squeeze a little more out of every trip.</div>
+ $.innerHTML=`<div class="auth"><img src="icon-192.png" alt="" width="84" height="84" style="border-radius:20px;display:block;margin-bottom:12px"><h1>Spare</h1><div class="mute">Scan tickets, squeeze a little more out of every trip.</div>
  <div class="tabs"><button class="${m==='login'?'':'ghost'}" data-auth="login">Log in</button><button class="${m==='signup'?'':'ghost'}" data-auth="signup">Create account</button></div>
  <form data-form="auth" class="card">${m.startsWith('forgot')?`<h2>${title}</h2>`:''}${fields}
  <details ${AUTH.api?'':'open'} style="margin-top:10px"><summary class="small mute">Server</summary><input id="aapi" placeholder="https://spare.yourname.workers.dev" value="${esc(AUTH.api)}"><div class="tiny mute">Leave empty on the website itself. The Android app needs the server's address.</div></details>

@@ -53,8 +53,8 @@ jobs:
         continue-on-error: true
         run: >
           npx --yes @capacitor/assets@3 generate --android --assetPath resources
-          --iconBackgroundColor '#1f7a52' --iconBackgroundColorDark '#1f7a52'
-          --splashBackgroundColor '#f5f2ec' --splashBackgroundColorDark '#151412'
+          --iconBackgroundColor '#111318' --iconBackgroundColorDark '#111318'
+          --splashBackgroundColor '#111318' --splashBackgroundColorDark '#151412'
 
       - name: Allow the camera (for scanning tickets)
         run: |
